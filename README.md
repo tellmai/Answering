@@ -6,12 +6,12 @@ Windows 10/11 64 位桌面软件。导入身份 Excel 后，按顺序完成区�
 
 ## 下载与运行
 
-前往 [v1.3.0 下载页面](https://github.com/tellmai/web-login-assistant/releases/tag/v1.3.0)，下载 `网页自动登录助手-Windows-x64.zip`，完整解压后双击 `WebLoginAssistant/WebLoginAssistant.exe`。
+前往 [v1.3.0 下载页面](https://github.com/tellmai/web-login-assistant/releases/tag/v1.3.0)，下载 `WebLoginAssistant-Windows-x64-v1.3.0.zip`，完整解压后双击 `WebLoginAssistant/WebLoginAssistant.exe`。发布附件使用英文文件名，软件界面及说明为中文。
 
 - 完整包包含 EXE、Qt、Playwright 驱动、OCR 模型和备用 Chrome，无需安装 Python，属于解压运行的免安装包。
 - 必须保留 EXE 旁的 `_internal` 文件夹。单独提供的 `WebLoginAssistant.exe` 是同一版本的启动程序，不能离开完整包独立运行。
 - 软件放在可写目录，身份表和题库由使用者自行导入。发布包不包含个人身份资料、原始题库或运行统计。
-- 可使用发布页中的 `SHA256SUMS.txt` 核对下载文件，例如：`Get-FileHash -Algorithm SHA256 -LiteralPath '网页自动登录助手-Windows-x64.zip'`。
+- 可使用发布页中的 `SHA256SUMS.txt` 核对下载文件，例如：`Get-FileHash -Algorithm SHA256 -LiteralPath 'WebLoginAssistant-Windows-x64-v1.3.0.zip'`。
 
 详细操作见 [使用说明](使用说明.md)，测试结果及未验证范围见 [验证记录](验证记录.md)。私有仓库和附件需登录有权限的 GitHub 账号才能访问。
 
