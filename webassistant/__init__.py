@@ -1,3 +1,4 @@
-"""Local Windows login assistant."""
+"""Answering: local Windows login and practice assistant."""
 
-__version__ = "1.3.0"
+APP_NAME = "Answering"
+__version__ = "1.3.1"

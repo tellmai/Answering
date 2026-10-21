@@ -9,7 +9,7 @@ output/
 results/
 tools/chrome/
 tools/gh/
-WebLoginAssistantDebug.spec
+AnsweringDebug.spec
 .env
 .env.*
 *.log

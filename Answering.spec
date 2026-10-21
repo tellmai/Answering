@@ -28,6 +28,6 @@ a = Analysis([str(root / 'main.py')], pathex=[str(root)], binaries=binaries,
 a.binaries = [entry for entry in a.binaries
     if Path(entry[0]).name.lower() not in {'icuuc.dll', 'icuin.dll', 'icudt78.dll'}]
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='WebLoginAssistant',
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='Answering',
     debug=False, bootloader_ignore_signals=False, strip=False, upx=False, console=False)
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='WebLoginAssistant')
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='Answering')

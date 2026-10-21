@@ -4,7 +4,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
@@ -18,6 +18,8 @@ from .models import DEFAULT_URL, SiteConfig, PracticeOptions
 from .privacy import redact
 from .batch import LABELS, status_text
 from .mock_exam import validate_bank
+from . import APP_NAME
+from .settings import load_settings
 
 
 class ImportWorker(QThread):
@@ -50,10 +52,10 @@ class ImportWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("网页自动登录助手")
+        self.setWindowTitle(APP_NAME)
         self.resize(1280, 1040)
         self.setMinimumSize(1100, 880)
-        self.settings = QSettings("LocalTools", "WebLoginAssistant")
+        self.settings = load_settings()
         self.candidates, self.questions = [], []
         self.rejected = []
         self.batch_records = []
@@ -87,7 +89,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
         layout.setSpacing(5)
-        title = QLabel("网页自动登录助手")
+        title = QLabel(APP_NAME)
         title.setStyleSheet("font-size:20px;font-weight:600;color:#20334c")
         layout.addWidget(title)
         layout.addWidget(QLabel("逐人登录 · 本地 100 题模拟测试，每题 1 分 · 可设置用时、最低分和分数范围 · 停止时保留网页"))

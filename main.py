@@ -7,9 +7,12 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from webassistant import APP_NAME, __version__
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Windows 网页自动登录助手")
+    parser = argparse.ArgumentParser(description="Answering · Windows 网页自动登录与本地模拟测试")
+    parser.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     parser.add_argument("--smoke-test", metavar="OUTPUT_DIR", help="离线自检并保存界面截图，不提交真实登录")
     args = parser.parse_args()
     if args.smoke_test:
@@ -18,7 +21,8 @@ def main():
     from PySide6.QtGui import QFont, QFontDatabase
     from PySide6.QtWidgets import QApplication
     app = QApplication(sys.argv[:1])
-    app.setApplicationName("WebLoginAssistant")
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(__version__)
     app.setOrganizationName("LocalTools")
     family = "Microsoft YaHei UI"
     # The offscreen Qt platform cannot always discover Windows system fonts.
@@ -86,7 +90,12 @@ def main():
                 async def check_browser():
                     from playwright.async_api import async_playwright
                     async with async_playwright() as playwright:
-                        browser, _ = await launch_browser(playwright, headless=True)
+                        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+                        bundled = base / "chrome/chrome-win64/chrome.exe"
+                        if getattr(sys, "frozen", False) and not bundled.is_file():
+                            raise RuntimeError("完整发布包缺少备用 Chrome")
+                        browser, _ = await launch_browser(playwright, explicit=str(bundled) if bundled.is_file() else "", headless=True)
+                        smoke_result["bundled_browser"] = bundled.is_file()
                         server = MockExamServer()
                         try:
                             page = await browser.new_page(viewport={"width": 1440, "height": 1000})

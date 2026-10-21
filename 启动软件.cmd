@@ -1,7 +1,7 @@
 @echo off
 cd /d "%~dp0"
-if exist "dist\WebLoginAssistant\WebLoginAssistant.exe" (
-    start "" "dist\WebLoginAssistant\WebLoginAssistant.exe"
+if exist "dist\Answering\Answering.exe" (
+    start "" "dist\Answering\Answering.exe"
 ) else (
     if exist ".venv\Scripts\pythonw.exe" (
         start "" ".venv\Scripts\pythonw.exe" "main.py"

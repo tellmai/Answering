@@ -14,7 +14,7 @@ from webassistant.models import Candidate, IdentityImport
 def isolated_settings(tmp_path, monkeypatch):
     # The organization/application overload always uses NativeFormat on Windows.
     # Supply an explicit INI instance so tests cannot change real user preferences.
-    monkeypatch.setattr("webassistant.gui.QSettings", lambda *args: QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat))
+    monkeypatch.setattr("webassistant.settings.QSettings", lambda organization, application: QSettings(str(tmp_path / f"{application}.ini"), QSettings.IniFormat))
 
 
 def wait_until(app, condition, timeout=10):
@@ -29,6 +29,7 @@ def test_invalid_import_clears_old_identity_and_duplicate_start_is_blocked(tmp_p
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     try:
+        assert window.windowTitle() == "Answering"
         wait_until(app, lambda: window.backend_ready)
         candidate = Candidate(2, "黔江区", "演示考生", "110101199001010010")
         window.identities_loaded(IdentityImport([candidate], [], "Sheet1"))

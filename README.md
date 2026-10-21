@@ -1,17 +1,19 @@
-# Windows 网页自动登录助手
+# Answering
 
 Windows 10/11 64 位桌面软件。导入身份 Excel 后，按顺序完成区县选择、考生登录、身份填写及本机验证码识别；可在登录后运行本地生成的 100 题模拟试卷，记录每人的处理状态、分数和用时。
 
-当前版本：**1.3.0**。真实网站操作止于登录；自动答题、分数范围和计时设置作用于软件生成的本地模拟试卷。
+当前版本：**1.3.1**。真实网站操作止于登录；自动答题、分数范围和计时设置作用于软件生成的本地模拟试卷。
 
 ## 下载与运行
 
-前往 [v1.3.0 下载页面](https://github.com/tellmai/web-login-assistant/releases/tag/v1.3.0)，下载 `WebLoginAssistant-Windows-x64-v1.3.0.zip`，完整解压后双击 `WebLoginAssistant/WebLoginAssistant.exe`。发布附件使用英文文件名，软件界面及说明为中文。
+前往 [v1.3.1 下载页面](https://github.com/tellmai/Answering/releases/tag/v1.3.1)，下载 `Answering-Windows-x64-v1.3.1.zip`，完整解压后双击 `Answering/Answering.exe`。发布附件使用英文文件名，软件界面及说明为中文。
 
 - 完整包包含 EXE、Qt、Playwright 驱动、OCR 模型和备用 Chrome，无需安装 Python，属于解压运行的免安装包。
-- 必须保留 EXE 旁的 `_internal` 文件夹。单独提供的 `WebLoginAssistant.exe` 是同一版本的启动程序，不能离开完整包独立运行。
+- 必须保留 EXE 旁的 `_internal` 文件夹。单独提供的 `Answering.exe` 是同一版本的启动程序，不能离开完整包独立运行。
 - 软件放在可写目录，身份表和题库由使用者自行导入。发布包不包含个人身份资料、原始题库或运行统计。
-- 可使用发布页中的 `SHA256SUMS.txt` 核对下载文件，例如：`Get-FileHash -Algorithm SHA256 -LiteralPath 'WebLoginAssistant-Windows-x64-v1.3.0.zip'`。
+- 可使用发布页中的 `SHA256SUMS.txt` 核对下载文件，例如：`Get-FileHash -Algorithm SHA256 -LiteralPath 'Answering-Windows-x64-v1.3.1.zip'`。
+
+从旧版升级时，首次启动会将 `LocalTools/WebLoginAssistant` 中新版尚不存在的设置迁移至 `LocalTools/Answering`，保留旧设置和结果文件。已有新版设置优先。
 
 详细操作见 [使用说明](使用说明.md)，测试结果及未验证范围见 [验证记录](验证记录.md)。私有仓库和附件需登录有权限的 GitHub 账号才能访问。
 
@@ -30,8 +32,8 @@ Windows 10/11 64 位桌面软件。导入身份 Excel 后，按顺序完成区�
 安装 Python 3.11 64 位，在 PowerShell 中运行：
 
 ```powershell
-git clone https://github.com/tellmai/web-login-assistant.git
-cd web-login-assistant
+git clone https://github.com/tellmai/Answering.git
+cd Answering
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe main.py
@@ -46,17 +48,21 @@ python -m venv .venv
 ## 测试与打包
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pytest --junitxml=build/test-results.xml
 .\scripts\build.ps1
+.\dist\Answering\Answering.exe --smoke-test build\exe-smoke
+.\.venv\Scripts\python.exe scripts\write_validation.py
 .\.venv\Scripts\python.exe scripts\package_release.py
 ```
 
-`requirements.in` 声明直接依赖，`requirements.txt` 锁定已验证版本。`dist/WebLoginAssistant` 是完整运行目录，`dist` 中生成免安装 ZIP 和源码 ZIP。打包前下载的 `tools/chrome` 会随软件分发。
+完整发布前先运行 `scripts/fetch_chrome.py` 准备备用浏览器。打包脚本同时生成 `Answering-Source-v1.3.1.zip`、`UserGuide.md`、`Validation.md`、`release-manifest.json` 和 `SHA256SUMS.txt`。
+
+`requirements.in` 声明直接依赖，`requirements.txt` 锁定已验证版本。`dist/Answering` 是完整运行目录，`dist` 中生成免安装 ZIP 和源码 ZIP。打包前下载的 `tools/chrome` 会随软件分发。
 
 离线自检：
 
 ```powershell
-.\dist\WebLoginAssistant\WebLoginAssistant.exe --smoke-test build\exe-smoke
+.\dist\Answering\Answering.exe --smoke-test build\exe-smoke
 ```
 
 自检使用虚构身份和合成试题，验证界面、OCR、浏览器、统计及本地 100 题作答，不提交真实账号登录。私有参考文件不随源码分发，依赖它们的测试在文件缺失时跳过。
@@ -73,6 +79,6 @@ python -m venv .venv
 | `webassistant/batch.py` | 人员状态和统计导出 |
 | `webassistant/mock_exam.py`、`assets/mock_exam` | 本地试卷、评分及页面 |
 | `tests` | 自动化测试 |
-| `scripts`、`WebLoginAssistant.spec` | 构建和分发工具 |
+| `scripts`、`Answering.spec` | 构建和分发工具 |
 
 项目尚未指定源码开源许可。依赖及随附浏览器的许可见 [第三方声明](THIRD_PARTY_NOTICES.md)。
