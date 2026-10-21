@@ -18,8 +18,8 @@ def main():
     if not passed or failed:
         raise RuntimeError("Automated tests did not pass")
     frozen = json.loads((ROOT / "build/exe-smoke/result.json").read_text(encoding="utf-8"))
-    required = ("ok", "frozen", "gui", "ocr_model", "chrome_launch", "bundled_browser", "batch_statistics", "mock_exam", "document_libraries")
-    if not all(frozen.get(key) for key in required) or frozen.get("mock_total") != 100 or frozen.get("mock_score") != 94:
+    required = ("ok", "frozen", "gui", "ocr_model", "chrome_launch", "bundled_browser", "execution_controls", "isolated_contexts", "batch_statistics", "mock_exam", "document_libraries")
+    if not all(frozen.get(key) for key in required) or frozen.get("mock_total") != 100 or frozen.get("mock_score") != 94 or frozen.get("concurrent_people") != 2:
         raise RuntimeError("Frozen EXE smoke test did not pass")
     date = datetime.now(timezone(timedelta(hours=8))).date()
     text = f"""# {APP_NAME} v{__version__} 验证记录
@@ -30,8 +30,10 @@ def main():
 
 - 自动化测试：{passed} 项通过，{len(skipped)} 项跳过，0 项失败。测试记录见构建过程生成的 build/test-results.xml。
 - 新增设置迁移测试：继承旧版偏好，保留新版已有值，不改写旧版设置，后续启动不重复迁移；全新安装保持默认行为。
+- 并发回归：数量上限、完成后补位、个人失败隔离、暂停补位、等待所有活动人员完成、立即中止全部活动人员、统计写入失败中止队列与保留待处理人员。
+- 真实浏览器回归：两人并发登录并完成本地 100 题作答、分别评分 99/100 与 100/100；Cookie 会话隔离、关闭单个会话不影响其他人员，以及执行期间 Qt 主界面定时器持续响应。
 - 回归覆盖：文件导入、数据脱敏、浏览器选择与本地登录夹具、批次控制、停止与关闭、本地模拟卷、评分及统计。
-- 正式 Answering.exe 离线自检通过：中文界面、OCR 模型推理、随附 Chrome 启动、文档库、100 题本地模拟作答、两次复核、独立评分 94/100、统计导出及界面截图；frozen=true、bundled_browser=true。
+- 正式 Answering.exe 离线自检通过：中文界面、OCR 模型推理、随附 Chrome 启动、文档库、100 题本地模拟作答、两次复核、两个隔离会话同时作答并分别评分 94/100、95/100，统计导出及界面截图；frozen=true、bundled_browser=true。
 - EXE 自检清除了 PYTHONHOME、PYTHONPATH、VIRTUAL_ENV，并将 PATH 限制为 Windows 系统目录。
 - 完整包包含 _internal 运行库、OCR 模型、网页资源及备用 Chrome；压缩包完整性和 SHA-256 校验由打包脚本核对。
 

@@ -77,6 +77,9 @@ def main():
                 window.test_mode.setChecked(True)
                 window.test_mode.blockSignals(False)
                 window.fastest.setChecked(True)
+                window.concurrency.setValue(2)
+                window.background.setChecked(True)
+                smoke_result["execution_controls"] = window.concurrency.maximum() == 30 and window.background.isChecked()
                 store = BatchStore(output / "statistics", window.candidates, stage="离线本地模拟自检")
                 store.practice_settings = vars(PracticeOptions(fastest=True))
                 store.persist()
@@ -97,19 +100,27 @@ def main():
                         browser, _ = await launch_browser(playwright, explicit=str(bundled) if bundled.is_file() else "", headless=True)
                         smoke_result["bundled_browser"] = bundled.is_file()
                         server = MockExamServer()
+                        contexts = [await browser.new_context(viewport={"width": 1440, "height": 1000}) for _ in range(2)]
                         try:
-                            page = await browser.new_page(viewport={"width": 1440, "height": 1000})
-                            await page.set_content("<h1>offline-check</h1>")
-                            assert await page.locator('h1').inner_text() == 'offline-check'
-                            plan = ExamRunPlan(94, 0, 90, 91, 99)
-                            paper = server.create_paper(window.candidates[0], questions, plan=plan)
-                            await page.goto(server.url_for(paper))
-                            await page.locator("article.question").nth(99).wait_for()
-                            await page.screenshot(path=str(output / "模拟试卷预览.png"))
-                            result = await answer_mock_exam(page, server, paper, validate_bank(questions), plan=plan)
-                            assert result.score == 94 and result.total == 100
-                            await page.screenshot(path=str(output / "模拟提交结果.png"))
-                            return result
+                            async def check_person(index):
+                                page = await contexts[index].new_page()
+                                plan = ExamRunPlan(94 + index, 0, 90, 91, 99)
+                                candidate = Candidate(index + 2, "黔江区", f"并发演示{index + 1}", f"11010119900101{index:04}")
+                                paper = server.create_paper(candidate, questions, plan=plan)
+                                await page.goto(server.url_for(paper))
+                                await page.locator("article.question").nth(99).wait_for()
+                                await page.evaluate("value => localStorage.setItem('isolation-check', value)", str(index))
+                                if index == 0:
+                                    await page.screenshot(path=str(output / "模拟试卷预览.png"))
+                                result = await answer_mock_exam(page, server, paper, validate_bank(questions), plan=plan)
+                                assert result.score == 94 + index and result.total == 100
+                                assert await page.evaluate("localStorage.getItem('isolation-check')") == str(index)
+                                if index == 0:
+                                    await page.screenshot(path=str(output / "模拟提交结果.png"))
+                                return result
+                            results = await asyncio.gather(*(check_person(index) for index in range(2)))
+                            smoke_result.update(concurrent_people=2, isolated_contexts=True, concurrent_scores=[r.score for r in results])
+                            return results[0]
                         finally:
                             await browser.close()
                             await asyncio.to_thread(server.close)

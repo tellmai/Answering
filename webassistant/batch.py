@@ -1,4 +1,4 @@
-"""Sequential login verification with durable, resumable identity statistics."""
+"""Bounded concurrent verification with durable, resumable identity statistics."""
 import asyncio
 import json
 import os
@@ -69,6 +69,7 @@ class BatchStore:
     def __init__(self, root, candidates, rejected=(), stage="登录验证"):
         self.stage = stage
         self.practice_settings = None
+        self.execution_settings = None
         self.folder = Path(root).resolve() / f"登录批次_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
         pairs = [(c, "") for c in candidates] + list(rejected)
         pairs.sort(key=lambda pair: pair[0].row)
@@ -85,7 +86,8 @@ class BatchStore:
             self.folder.mkdir(parents=True, exist_ok=True)
             target = self.folder / "人员状态.json"
             temporary = target.with_suffix(".json.tmp")
-            payload = {"version": 4, "stage": self.stage, "updated": now(), "practice_settings": self.practice_settings,
+            payload = {"version": 5, "stage": self.stage, "updated": now(), "practice_settings": self.practice_settings,
+                       "execution_settings": self.execution_settings,
                        "records": [asdict(r) for r in self.records]}
             with temporary.open("w", encoding="utf-8") as stream:
                 json.dump(payload, stream, ensure_ascii=False, indent=2)
@@ -152,6 +154,7 @@ class BatchRunner:
         try:
             return self.store.update(index, **changes)
         except StatisticsError:
+            self.control.immediate.set()
             if changes.get("status") == "running":
                 # No browser action has started yet. Do not leave a phantom active person.
                 self.store.records[index] = replace(self.store.records[index], status="failed",
@@ -165,35 +168,57 @@ class BatchRunner:
             # The UI must also show the last known outcome when export is blocked.
             self.changed(self.store.records[index])
 
-    async def run(self, perform):
+    async def run(self, perform, concurrency=1):
+        from collections import deque
+        from .models import ExecutionOptions
+        ExecutionOptions(concurrency).validate()
         self.store.persist()
-        for record in list(self.store.records):
-            while self.control.paused.is_set() and not self.control.immediate.is_set() and not self.control.after_current.is_set():
-                await asyncio.sleep(0.05)
-            if self.control.immediate.is_set() or self.control.after_current.is_set():
-                break
-            if record.status != "pending":
-                continue
-            self.update(record.index, status="running", started=now())
-            try:
-                outcome = await perform(record.candidate)
-            except asyncio.CancelledError:
-                self.update(record.index, status="stopped", reason="用户直接停止，已发出的请求无法撤回；登录结果未确认", ended=now())
-                raise
-            except StatisticsError:
+        pending = deque(r.index for r in self.store.records if r.status == "pending")
+
+        async def worker():
+            while pending:
+                while self.control.paused.is_set() and not (self.control.immediate.is_set() or self.control.after_current.is_set()):
+                    await asyncio.sleep(0.05)
+                if not pending or self.control.immediate.is_set() or self.control.after_current.is_set():
+                    return
+                index = pending.popleft()
+                candidate = self.store.records[index].candidate
+                self.update(index, status="running", started=now())
                 try:
-                    self.update(record.index, status="failed", reason="统计写入失败，当前人员未完成全部步骤", ended=now())
+                    outcome = await perform(candidate)
+                except asyncio.CancelledError:
+                    self.update(index, status="stopped", reason="用户直接停止或批次中断，当前人员结果未确认", ended=now())
+                    raise
                 except StatisticsError:
-                    pass
-                raise
-            except Exception as error:
-                from playwright.async_api import Error as PlaywrightError
-                message = "页面超时、浏览器已关闭或浏览器操作失败" if isinstance(error, PlaywrightError) else str(error)
-                message = redact(message, (record.candidate.name, record.candidate.id_number))
-                self.update(record.index, status="failed", reason=message, ended=now())
-            else:
-                changes = asdict(outcome) if isinstance(outcome, PersonOutcome) else {"reason": "已确认考生主页及个人信息标志"}
-                self.update(record.index, status="completed", ended=now(), **changes)
+                    try:
+                        self.update(index, status="failed", reason="统计写入失败，当前人员未完成全部步骤", ended=now())
+                    except StatisticsError:
+                        pass
+                    raise
+                except Exception as error:
+                    from playwright.async_api import Error as PlaywrightError
+                    message = "页面超时、浏览器已关闭或浏览器操作失败" if isinstance(error, PlaywrightError) else str(error)
+                    self.update(index, status="failed", reason=redact(message, (candidate.name, candidate.id_number)), ended=now())
+                else:
+                    changes = asdict(outcome) if isinstance(outcome, PersonOutcome) else {"reason": "已确认考生主页及个人信息标志"}
+                    self.update(index, status="completed", ended=now(), **changes)
+
+        tasks = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(pending)))]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for record in list(self.store.records):
+                if record.status == "running":
+                    self.store.records[record.index] = replace(record, status="stopped", reason="批次中断，当前人员结果未确认", ended=now())
+                    self.changed(self.store.records[record.index])
+            try:
+                self.store.persist()
+            except StatisticsError:
+                pass
+            raise
         return self.counts()
 
     def counts(self):

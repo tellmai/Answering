@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import pytest
 
 from webassistant.browser import LoginFailure, SiteSession, find_chrome
-from webassistant.models import Candidate, SiteConfig, PracticeOptions
+from webassistant.models import Candidate, SiteConfig, PracticeOptions, ExecutionOptions
 
 
 # This is a local fixture, not a real challenge. No private data or real server is used.
@@ -164,6 +164,7 @@ def test_captcha_retry_waits_for_new_image(local_site):
 def test_worker_login_to_local_exam_scores_two_people_and_closes_pages(local_site, sample_bank, tmp_path, monkeypatch):
     from dataclasses import replace
     from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import QTimer
     from openpyxl import load_workbook
     from webassistant.controller import BrowserWorker
     url, state = local_site
@@ -178,6 +179,15 @@ def test_worker_login_to_local_exam_scores_two_people_and_closes_pages(local_sit
     worker.job_finished.connect(lambda: finished.append(True))
     worker.failed.connect(errors.append)
     worker.score_ready.connect(lambda candidate, result: scores.append((candidate.row, result.score)))
+    live, active_counts, ticks = {}, [], []
+    def updated(record):
+        live[record.index] = record.status
+        active_counts.append(sum(value == "running" for value in live.values()))
+    worker.person_updated.connect(updated)
+    heartbeat = QTimer()
+    heartbeat.setInterval(10)
+    heartbeat.timeout.connect(lambda: ticks.append(True))
+    heartbeat.start()
     async def recognize(_):
         return "TEST"
     monkeypatch.setattr(worker.ocr, "recognize", recognize)
@@ -191,10 +201,11 @@ def test_worker_login_to_local_exam_scores_two_people_and_closes_pages(local_sit
     try:
         wait(lambda: ready)
         worker.start_job("login", SiteConfig(url, find_chrome(), 10000, True),
-                         [CANDIDATE, replace(CANDIDATE, row=3)], str(tmp_path), (), sample_bank, PracticeOptions(fastest=True, score_min=99, score_max=100))
+                         [CANDIDATE, replace(CANDIDATE, row=3)], str(tmp_path), (), sample_bank, PracticeOptions(fastest=True, score_min=99, score_max=100), ExecutionOptions(concurrency=2, background=True))
         wait(lambda: finished)
         assert not errors
-        assert [row for row, _ in scores] == [2, 3] and {score for _, score in scores} == {99, 100}
+        assert max(active_counts) == 2 and len(ticks) > 5
+        assert sorted(row for row, _ in scores) == [2, 3] and {score for _, score in scores} == {99, 100}
         assert all(r.status == "completed" and r.stage == "本地模拟测试" and 99 <= r.score <= 100 and r.total == 100 for r in worker.last_store.records)
         assert all(s.page.is_closed() for s in worker.sessions)
         assert state["posts"] == 2
@@ -202,8 +213,33 @@ def test_worker_login_to_local_exam_scores_two_people_and_closes_pages(local_sit
         assert sorted(r[9:13] for r in wb.active.iter_rows(min_row=2, values_only=True)) == [(99, 100, 99, 100), (100, 100, 100, 100)]
         wb.close()
     finally:
+        heartbeat.stop()
         worker.shutdown()
         wait(lambda: not worker.isRunning())
+
+
+def test_shared_browser_contexts_isolate_cookies_and_close_independently(local_site):
+    from playwright.async_api import async_playwright
+    url, state = local_site
+    async def run():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(executable_path=find_chrome(), headless=True)
+            sessions = [SiteSession(playwright, SiteConfig(url, find_chrome(), 10000, True), browser=browser) for _ in range(2)]
+            try:
+                await asyncio.gather(*(session.login(CANDIDATE, FakeOCR("TEST")) for session in sessions))
+                assert sessions[0].context != sessions[1].context
+                for index, session in enumerate(sessions):
+                    await session.context.add_cookies([{"name": "identity", "value": str(index), "url": url}])
+                for index, session in enumerate(sessions):
+                    cookies = await session.context.cookies()
+                    assert next(c["value"] for c in cookies if c["name"] == "identity") == str(index)
+                await sessions[0].close()
+                assert browser.is_connected() and not sessions[1].page.is_closed()
+            finally:
+                await asyncio.gather(*(session.close() for session in sessions))
+                await browser.close()
+    asyncio.run(run())
+    assert state["posts"] == 2
 
 
 def test_identity_error_is_not_retried(local_site):

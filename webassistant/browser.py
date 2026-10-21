@@ -21,18 +21,20 @@ def find_chrome() -> str:
 
 
 class SiteSession:
-    def __init__(self, playwright, config: SiteConfig, progress=lambda _: None):
+    def __init__(self, playwright, config: SiteConfig, progress=lambda _: None, browser=None):
         self.playwright = playwright
         self.config = config
         self.progress = progress
-        self.browser = None
+        self.browser = browser
+        self.owns_browser = browser is None
         self.context = None
         self.page = None
 
     async def open(self, headless=False):
         self.config.validate()
-        self.browser, self.browser_choice = await launch_browser(
-            self.playwright, self.config.chrome_path, headless, self.progress)
+        if self.browser is None:
+            self.browser, self.browser_choice = await launch_browser(
+                self.playwright, self.config.chrome_path, headless, self.progress)
         self.context = await self.browser.new_context(viewport={"width": 1280, "height": 900}, locale="zh-CN")
         self.context.set_default_timeout(self.config.timeout_ms)
         self.context.set_default_navigation_timeout(self.config.timeout_ms)
@@ -192,9 +194,14 @@ class SiteSession:
             await asyncio.gather(manual_task, closed_task, return_exceptions=True)
 
     async def close(self):
-        if self.browser:
-            await self.browser.close()
-            self.browser = None
+        try:
+            if self.context:
+                await self.context.close()
+                self.context = None
+        finally:
+            if self.browser and self.owns_browser:
+                await self.browser.close()
+                self.browser = None
 
 
 async def inspect_environment(playwright, config: SiteConfig, ocr, district: str, report):

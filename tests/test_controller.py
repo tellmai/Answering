@@ -12,6 +12,16 @@ from webassistant.browser import CaptchaFailure
 from webassistant.models import Candidate, SiteConfig, PracticeOptions
 
 
+@pytest.fixture(autouse=True)
+def fake_shared_browser(monkeypatch):
+    class Browser:
+        async def close(self):
+            pass
+    async def launch(*args, **kwargs):
+        return Browser(), None
+    monkeypatch.setattr("webassistant.controller.launch_browser", launch)
+
+
 def wait(app, condition):
     deadline = time.monotonic() + 10
     while not condition() and time.monotonic() < deadline:
@@ -24,7 +34,7 @@ def wait(app, condition):
 def test_worker_thread_batch_and_stop_during_startup(tmp_path, monkeypatch, stop_immediately):
     visited, ready, finished, errors = [], [], [], []
     class Session:
-        def __init__(self, *_):
+        def __init__(self, *_, **kwargs):
             pass
         async def login(self, candidate, _):
             visited.append(candidate.row)
@@ -63,7 +73,7 @@ def test_stop_during_mock_exam_includes_whole_person(tmp_path, monkeypatch, samp
     entered, ready, finished, closed = [], [], [], []
     class Session:
         page = None
-        def __init__(self, *_):
+        def __init__(self, *_, **kwargs):
             pass
         async def login(self, *_):
             pass
@@ -110,7 +120,7 @@ def test_late_stop_during_server_cleanup_still_finishes_job(tmp_path, monkeypatc
             super().close()
     class Session:
         page = None
-        def __init__(self, *_):
+        def __init__(self, *_, **kwargs):
             pass
         async def login(self, *_):
             pass
@@ -143,7 +153,7 @@ def test_late_stop_during_server_cleanup_still_finishes_job(tmp_path, monkeypatc
 def test_mock_resource_failure_records_every_person(tmp_path, monkeypatch, sample_bank):
     ready, finished = [], []
     class Session:
-        def __init__(self, *_):
+        def __init__(self, *_, **kwargs):
             pass
         async def login(self, *_):
             pass
@@ -174,7 +184,7 @@ def test_last_person_keeps_result_while_stop_dialog_is_open(tmp_path, monkeypatc
     ready, entered, finished, closed = [], [], [], []
     class Session:
         page = None
-        def __init__(self, *_):
+        def __init__(self, *_, **kwargs):
             pass
         async def login(self, *_):
             pass

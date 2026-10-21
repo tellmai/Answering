@@ -47,6 +47,17 @@ class BankImport:
 
 
 @dataclass(frozen=True)
+class ExecutionOptions:
+    # Keep programmatic callers serial unless they explicitly request concurrency.
+    concurrency: int = 1
+    background: bool = True
+
+    def validate(self):
+        if isinstance(self.concurrency, bool) or not isinstance(self.concurrency, int) or not 1 <= self.concurrency <= 30:
+            raise ValueError("并发数量须为 1–30 的整数")
+
+
+@dataclass(frozen=True)
 class PracticeOptions:
     fastest: bool = False
     minutes_min: float = 10.0

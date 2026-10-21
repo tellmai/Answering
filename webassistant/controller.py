@@ -8,7 +8,7 @@ from .ocr import LocalOCR
 from .privacy import redact
 from .mock_exam import MockExamServer, PracticePlanner, answer_mock_exam, validate_bank
 from .browsers import launch_browser
-from .models import Candidate, PracticeOptions
+from .models import Candidate, PracticeOptions, ExecutionOptions
 
 
 class BrowserWorker(QThread):
@@ -28,6 +28,7 @@ class BrowserWorker(QThread):
         super().__init__(parent)
         self.loop = self.task = None
         self.sessions = []
+        self.batch_browser = None
         self.ocr = LocalOCR()
         self.secrets = ()
         self.control = BatchControl()
@@ -71,6 +72,9 @@ class BrowserWorker(QThread):
     async def _close_sessions(self):
         await asyncio.gather(*(s.close() for s in self.sessions), return_exceptions=True)
         self.sessions.clear()
+        if self.batch_browser:
+            browser, self.batch_browser = self.batch_browser, None
+            await browser.close()
 
     async def _close_preview(self):
         browser, server = self.preview_browser, self.preview_server
@@ -82,58 +86,77 @@ class BrowserWorker(QThread):
             if server:
                 await asyncio.to_thread(server.close)
 
-    def start_job(self, kind, config, candidates=None, output_root="", rejected=(), test_questions=(), practice_options=None):
+    def start_job(self, kind, config, candidates=None, output_root="", rejected=(), test_questions=(), practice_options=None, execution_options=None):
         self.control = BatchControl()
         self._entered = False
         def schedule():
             if self.task and not self.task.done():
                 return
-            self.task = self.loop.create_task(self._execute(kind, config, candidates, output_root, rejected, test_questions, practice_options))
+            self.task = self.loop.create_task(self._execute(kind, config, candidates, output_root, rejected, test_questions, practice_options, execution_options))
         self.loop.call_soon_threadsafe(schedule)
 
-    async def _execute(self, kind, config, candidates, output_root, rejected, test_questions, practice_options):
+    async def _execute(self, kind, config, candidates, output_root, rejected, test_questions, practice_options, execution_options=None):
         self._entered = True
         runner = None
         exam_server = None
-        active_paper = None
+        execution = execution_options or ExecutionOptions()
         candidates = list(candidates or [])
         self.secrets = tuple(value for c in candidates for value in (c.name, c.id_number))
         try:
             if kind == "login":
+                execution.validate()
                 knowledge = validate_bank(test_questions) if test_questions else None
                 planner = PracticePlanner(practice_options or PracticeOptions()) if knowledge else None
                 store = BatchStore(output_root, candidates, rejected, "登录后本地模拟测试" if knowledge else "登录验证")
                 store.practice_settings = asdict(planner.options) if planner else None
+                store.execution_settings = asdict(execution)
                 self.last_store = store
                 runner = BatchRunner(store, self.control, self.person_updated.emit)
                 self.batch_started.emit(str(store.folder), list(store.records))
+                store.persist()
+                if self.control.immediate.is_set():
+                    raise asyncio.CancelledError
+                await self._close_preview()
+                await self._close_sessions()
+                self.batch_browser, _ = await launch_browser(self.playwright, config.chrome_path, headless=execution.background, progress=self._progress)
+                session_gate = asyncio.Lock()
+                completed_sessions, papers = [], {}
                 async def perform(candidate):
-                    nonlocal exam_server, active_paper
-                    await self._close_preview()
-                    await self._close_sessions()
-                    if active_paper:
-                        exam_server.discard(active_paper)
-                        active_paper = None
-                    session = SiteSession(self.playwright, config, self._progress)
-                    self.sessions.append(session)
-                    await session.login(candidate, self.ocr)
-                    if knowledge:
-                        index = next(r.index for r in store.records if r.candidate.row == candidate.row)
-                        plan = planner.next_plan()
-                        runner.update(index, stage="本地模拟测试", reason="登录成功，正在进行本地模拟测试", target_score=plan.target_score, planned_seconds=plan.duration_seconds)
-                        mode = "最快完成" if not plan.duration_seconds else f"{plan.duration_seconds / 60:.1f} 分钟"
-                        self._progress(f"登录成功，跳转本地模拟测试 · 目标 {plan.target_score} 分 · {mode}")
-                        if exam_server is None:
-                            exam_server = MockExamServer()
-                        active_paper = exam_server.create_paper(candidate, test_questions, plan=plan)
-                        result = await answer_mock_exam(session.page, exam_server, active_paper, knowledge, self._progress, plan=plan)
-                        planner.record_success(result.score)
-                        self.score_ready.emit(candidate, result)
-                        return PersonOutcome("本地模拟测试", "100 题已作答、两次复核并提交评分", result.score, result.correct, result.total, result.maximum, result.elapsed_seconds, result.planned_seconds, result.target_score)
-                counts = await runner.run(perform)
+                    nonlocal exam_server
+                    async with session_gate:
+                        if len(self.sessions) >= execution.concurrency and completed_sessions:
+                            old = completed_sessions.pop(0)
+                            await old.close()
+                            self.sessions.remove(old)
+                            if old in papers:
+                                exam_server.discard(papers.pop(old))
+                        progress = lambda message: self._progress(f"第 {candidate.row} 行：{message}")
+                        session = SiteSession(self.playwright, config, progress, browser=self.batch_browser)
+                        self.sessions.append(session)
+                    plan = None
+                    try:
+                        await session.login(candidate, self.ocr)
+                        if knowledge:
+                            index = next(r.index for r in store.records if r.candidate.row == candidate.row)
+                            plan = planner.reserve_plan()
+                            runner.update(index, stage="本地模拟测试", reason="登录成功，正在进行本地模拟测试", target_score=plan.target_score, planned_seconds=plan.duration_seconds)
+                            mode = "最快完成" if not plan.duration_seconds else f"{plan.duration_seconds / 60:.1f} 分钟"
+                            progress(f"登录成功，跳转本地模拟测试 · 目标 {plan.target_score} 分 · {mode}")
+                            if exam_server is None:
+                                exam_server = MockExamServer()
+                            paper = papers[session] = exam_server.create_paper(candidate, test_questions, plan=plan)
+                            result = await answer_mock_exam(session.page, exam_server, paper, knowledge, progress, plan=plan)
+                            planner.record_success(result.score)
+                            self.score_ready.emit(candidate, result)
+                            return PersonOutcome("本地模拟测试", "100 题已作答、两次复核并提交评分", result.score, result.correct, result.total, result.maximum, result.elapsed_seconds, result.planned_seconds, result.target_score)
+                    finally:
+                        if plan:
+                            planner.release_plan(plan)
+                        completed_sessions.append(session)
+                counts = await runner.run(perform, execution.concurrency)
                 label = "批量本地模拟测试" if knowledge else "批量登录验证"
                 stopping = self.control.after_current.is_set() or self.control.immediate.is_set()
-                suffix = "已停止后续操作，当前网页保留。" if stopping else "本地试卷页面已关闭。" if knowledge else "最后一个浏览器保留供检查。"
+                suffix = "已停止接入新人员，当前会话保留至关闭软件。" if stopping else "本地试卷页面已关闭。" if knowledge else f"保留最近最多 {execution.concurrency} 个身份会话。"
                 self.completed.emit(f"{label}已结束：完成 {counts['completed']} 人，失败/中止 {counts['failed'] + counts['stopped']} 人，未开始 {counts['pending']} 人。结果已保存。{suffix}")
             elif kind == "preview":
                 validate_bank(test_questions)
@@ -181,6 +204,9 @@ class BrowserWorker(QThread):
                 if stopped:
                     self.retained_sessions.extend(self.sessions)
                     self.sessions.clear()
+                    if self.batch_browser:
+                        self.retained_browsers.append(self.batch_browser)
+                        self.batch_browser = None
                     if exam_server:
                         self.retained_servers.append(exam_server)
                         exam_server = None

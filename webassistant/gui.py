@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from .controller import BrowserWorker
 from .importers import load_bank, load_identities
-from .models import DEFAULT_URL, SiteConfig, PracticeOptions
+from .models import DEFAULT_URL, SiteConfig, PracticeOptions, ExecutionOptions
 from .privacy import redact
 from .batch import LABELS, status_text
 from .mock_exam import validate_bank
@@ -116,6 +116,22 @@ class MainWindow(QMainWindow):
         output_row.addWidget(self.output_root, 1)
         output_row.addWidget(self.output_button)
         form.addRow("统计保存位置", output_row)
+        execution_row = QHBoxLayout()
+        self.concurrency = QSpinBox()
+        self.concurrency.setObjectName("flowConcurrency")
+        self.concurrency.setRange(1, 30)
+        self.concurrency.setValue(self.settings.value("concurrency", 10, type=int))
+        self.concurrency.setSuffix(" 人")
+        self.concurrency.setToolTip("每个人从登录到本地模拟测试结束占一个名额，完成或失败后自动补位。")
+        self.background = QCheckBox("后台执行（隐藏浏览器）")
+        self.background.setObjectName("backgroundExecution")
+        self.background.setChecked(self.settings.value("background", True, type=bool))
+        self.background.setToolTip("本批次浏览器不显示窗口、不抢占前台；仍可查看成绩、日志和停止任务。预览试卷始终单独显示。")
+        execution_row.addWidget(self.concurrency)
+        execution_row.addWidget(self.background)
+        execution_row.addStretch(1)
+        execution_row.addWidget(QLabel("独立身份会话 · 完成后自动补位"))
+        form.addRow("并发数量", execution_row)
         test_row = QHBoxLayout()
         self.test_mode = QCheckBox("测试开关：登录成功后进入本地 100 题模拟考试")
         self.test_mode.setObjectName("testModeSwitch")
@@ -310,7 +326,7 @@ class MainWindow(QMainWindow):
         self.preview_test_button.setEnabled(self.backend_ready and not locked and self.test_mode.isChecked())
         self.start_button.setText("启动登录与本地模拟测试" if self.test_mode.isChecked() else "启动批量登录")
         self.open_results_button.setEnabled(bool(self.result_folder))
-        for widget in (self.url, self.chrome, self.chrome_button, self.output_root, self.output_button, self.identity_button, self.bank_button, self.people, self.test_mode, self.fastest, self.minimum_score, self.score_min, self.score_max):
+        for widget in (self.url, self.chrome, self.chrome_button, self.output_root, self.output_button, self.identity_button, self.bank_button, self.test_mode, self.fastest, self.minimum_score, self.score_min, self.score_max, self.concurrency, self.background):
             widget.setEnabled(not locked)
         self.minutes_min.setEnabled(not locked and not self.fastest.isChecked())
         self.minutes_max.setEnabled(not locked and not self.fastest.isChecked())
@@ -446,6 +462,8 @@ class MainWindow(QMainWindow):
             config.validate()
             testing = self.test_mode.isChecked() and kind in ("login", "preview")
             options = PracticeOptions(self.fastest.isChecked(), self.minutes_min.value(), self.minutes_max.value(), self.minimum_score.value(), self.score_min.value(), self.score_max.value())
+            execution = ExecutionOptions(self.concurrency.value(), self.background.isChecked())
+            execution.validate()
             if testing:
                 options.validate()
                 validate_bank(self.questions)
@@ -462,6 +480,8 @@ class MainWindow(QMainWindow):
         self.settings.setValue("output_root", self.output_root.text().strip())
         for key, value in vars(options).items():
             self.settings.setValue(key, value)
+        for key, value in vars(execution).items():
+            self.settings.setValue(key, value)
         self.busy = True
         self.job_kind = kind
         self.inspection_issues = []
@@ -477,7 +497,7 @@ class MainWindow(QMainWindow):
                     except OSError:
                         self._check_result(label, False, "文件已移动、删除或无法读取")
             self.show_status("正在检查模型、浏览器和公开登录页面；不会提交身份信息")
-        self.backend.start_job(kind, config, list(self.candidates), self.output_root.text().strip(), list(self.rejected), list(self.questions) if testing else [], options)
+        self.backend.start_job(kind, config, list(self.candidates), self.output_root.text().strip(), list(self.rejected), list(self.questions) if testing else [], options, execution)
 
     def _check_result(self, label, ok, detail):
         if not ok and label != "身份文件":
@@ -496,7 +516,7 @@ class MainWindow(QMainWindow):
                 choice = self._ask_stop_choice()
                 if choice == "after":
                     self.backend.stop_after_current()
-                    self.show_status("已请求当前人员结束后停止；不会启动下一人")
+                    self.show_status("已请求所有正在执行的人员完成后停止；不会接入新人员")
                 elif choice == "now":
                     self._stop_now()
             finally:
@@ -507,8 +527,8 @@ class MainWindow(QMainWindow):
     def _ask_stop_choice(self):
         box = QMessageBox(self)
         box.setWindowTitle("停止批量登录")
-        box.setText("当前人员正在测试，是否等待当前人员完成测试后再停止？")
-        box.setInformativeText("等待完成会让当前人员完成本批次的全部步骤（含已开启的本地模拟测试）。确认期间不会启动下一人。")
+        box.setText("是否等待所有正在执行的人员完成后停止？")
+        box.setInformativeText("等待完成会让所有正在执行的人员完成全部步骤（含本地模拟测试）。确认期间不接入新人员；直接停止会中止所有当前任务。")
         after = box.addButton("是，等待测试完成后停止", QMessageBox.YesRole)
         direct = box.addButton("否，直接停止", QMessageBox.NoRole)
         cancel = box.addButton("取消", QMessageBox.RejectRole)
@@ -544,8 +564,11 @@ class MainWindow(QMainWindow):
     def _render_batch(self):
         counts = Counter(r.status for r in self.batch_records)
         self.batch_counts.setText(f"已完成 {counts['completed']} · 失败/中止 {counts['failed'] + counts['stopped']} · 正在进行 {counts['running']} · 未开始 {counts['pending']}")
-        active = next((r for r in self.batch_records if r.status == "running"), None)
-        self.current_person.setText(f"当前人员：第 {active.candidate.row} 行 · {active.candidate.district} · {active.candidate.name} · {active.candidate.masked_id} · {status_text(active)}" if active else "当前人员：无（等待开始或本批次已结束）")
+        active = [r for r in self.batch_records if r.status == "running"]
+        summary = "；".join(f"第 {r.candidate.row} 行 · {r.candidate.name} · {status_text(r)}" for r in active[:3])
+        if len(active) > 3:
+            summary += f"；另 {len(active) - 3} 人（见正在进行列表）"
+        self.current_person.setText(f"正在执行 {len(active)} 人：{summary}" if active else "当前人员：无（等待开始或本批次已结束）")
         for key, table in self.result_tables.items():
             records = [r for r in self.batch_records if r.status == key or (key == "failed" and r.status == "stopped")]
             table.setRowCount(len(records))

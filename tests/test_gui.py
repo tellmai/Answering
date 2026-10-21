@@ -89,6 +89,30 @@ def test_stop_choices_and_batch_views(tmp_path, monkeypatch, choice, expected):
         app.processEvents()
 
 
+def test_execution_options_are_snapshotted_while_views_stay_usable(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    try:
+        wait_until(app, lambda: window.backend_ready)
+        assert window.concurrency.value() == 10 and window.background.isChecked()
+        window.concurrency.setValue(4)
+        window.output_root.setText(str(tmp_path))
+        window.identities_loaded(IdentityImport([Candidate(2, "黔江区", "演示甲", "110101199001010010")], [], "Sheet1"))
+        calls = []
+        monkeypatch.setattr(window.backend, "start_job", lambda *args: calls.append(args))
+        window._start_job("login")
+        assert calls[0][7].concurrency == 4 and calls[0][7].background
+        assert window.settings.value("concurrency", type=int) == 4
+        assert window.people.isEnabled() and window.result_tabs.isEnabled() and window.log.isEnabled()
+        assert not window.concurrency.isEnabled() and not window.background.isEnabled()
+        window._job_finished()
+        assert window.concurrency.isEnabled() and window.background.isEnabled()
+    finally:
+        window.close()
+        wait_until(app, lambda: not window.backend.isRunning())
+        app.processEvents()
+
+
 def test_mock_switch_requires_bank_previews_and_logs_score(tmp_path, monkeypatch, sample_bank):
     from webassistant.mock_exam import ExamScore
     from webassistant.models import BankImport

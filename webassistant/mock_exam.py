@@ -28,6 +28,20 @@ class PracticePlanner:
         self.rng = rng or random.SystemRandom()
         self.counts = {score: 0 for score in range(max(options.minimum_score, options.score_min), options.score_max + 1)}
         self.last_score = None
+        self.reserved = Counter()
+        self.last_reserved = None
+
+    def reserve_plan(self):
+        eligible = [score for score in self.counts if score != self.last_reserved]
+        least = min(self.counts[score] + self.reserved[score] for score in eligible)
+        score = self.rng.choice([score for score in eligible if self.counts[score] + self.reserved[score] == least])
+        self.reserved[score] += 1
+        self.last_reserved = score
+        duration = 0 if self.options.fastest else self.rng.uniform(self.options.minutes_min, self.options.minutes_max) * 60
+        return ExamRunPlan(score, duration, self.options.minimum_score, self.options.score_min, self.options.score_max)
+
+    def release_plan(self, plan):
+        self.reserved[plan.target_score] -= 1
 
     def next_plan(self):
         eligible = [score for score in self.counts if score != self.last_score]
