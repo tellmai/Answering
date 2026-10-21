@@ -100,7 +100,7 @@ def test_stop_during_mock_exam_includes_whole_person(tmp_path, monkeypatch, samp
         wait(app, lambda: finished)
         records = worker.last_store.records
         assert records[0].status == ("completed" if graceful else "stopped")
-        assert (91 <= records[0].score <= 99) if graceful else records[0].score is None
+        assert (98 <= records[0].score <= 100) if graceful else records[0].score is None
         assert records[1].status == "pending" and len(entered) == 1
         assert not closed and worker.retained_sessions and worker.retained_servers
     finally:
@@ -144,7 +144,7 @@ def test_late_stop_during_server_cleanup_still_finishes_job(tmp_path, monkeypatc
         worker.stop_job()
         wait(app, lambda: finished)
         assert worker.last_store.records[0].status == "completed"
-        assert 91 <= worker.last_store.records[0].score <= 99
+        assert 98 <= worker.last_store.records[0].score <= 100
     finally:
         worker.shutdown()
         wait(app, lambda: not worker.isRunning())

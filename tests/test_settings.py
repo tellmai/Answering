@@ -1,4 +1,5 @@
 from PySide6.QtCore import QSettings
+import pytest
 
 from webassistant.settings import load_settings
 
@@ -37,3 +38,19 @@ def test_clean_install_has_no_legacy_preferences(tmp_path, monkeypatch):
     settings = load_settings()
     assert not settings.contains("url")
     assert not settings.contains("output_root")
+    assert (settings.value("score_min", type=int), settings.value("score_max", type=int)) == (98, 100)
+
+
+@pytest.mark.parametrize("old,expected", [((91, 99), (98, 100)), ((95, 99), (95, 99)), ((98, 100), (98, 100))])
+def test_score_defaults_upgrade_once_without_overwriting_custom_ranges(tmp_path, monkeypatch, old, expected):
+    _, current = stores(tmp_path, monkeypatch)
+    current.setValue("score_min", old[0])
+    current.setValue("score_max", old[1])
+    current.sync()
+    settings = load_settings()
+    assert (settings.value("score_min", type=int), settings.value("score_max", type=int)) == expected
+    settings.setValue("score_min", 91)
+    settings.setValue("score_max", 99)
+    settings.sync()
+    settings = load_settings()
+    assert (settings.value("score_min", type=int), settings.value("score_max", type=int)) == (91, 99)

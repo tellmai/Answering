@@ -152,6 +152,7 @@ def test_browser_answers_reviews_submits_and_manual_button_validation(sample_ban
 def test_default_timing_score_rotation_and_invalid_intersections():
     defaults = PracticeOptions()
     assert not defaults.fastest and defaults.minutes_min == defaults.minutes_max == 10
+    assert (defaults.score_min, defaults.score_max) == (98, 100)
     planner = PracticePlanner(PracticeOptions(fastest=True, score_min=91, score_max=94), random.Random(2))
     scores = []
     for _ in range(25):
@@ -170,6 +171,43 @@ def test_default_timing_score_rotation_and_invalid_intersections():
     for options in (PracticeOptions(score_min=100, score_max=100), PracticeOptions(minimum_score=99, score_max=99), PracticeOptions(minutes_min=12, minutes_max=8)):
         with pytest.raises(ValueError):
             options.validate()
+
+
+def test_fastest_repairs_changed_answer_during_second_review(sample_bank, monkeypatch):
+    server = MockExamServer()
+    async def run():
+        from playwright.async_api import async_playwright, Locator
+        async with async_playwright() as playwright:
+            browser, _ = await launch_browser(playwright, headless=True)
+            try:
+                page = await browser.new_page()
+                steps, tampered, pending = [], [], [False]
+                original = Locator.evaluate_all
+                def progress(message):
+                    steps.append(message)
+                    if "提交前再次复核" in message:
+                        pending[0] = True
+                async def snapshot(locator, expression, *args, **kwargs):
+                    if pending[0]:
+                        pending[0] = False
+                        await page.locator("article.question input").first.evaluate("i => { for (const x of i.closest('article').querySelectorAll('input')) x.checked=false; }")
+                        tampered.append(True)
+                    return await original(locator, expression, *args, **kwargs)
+                monkeypatch.setattr(Locator, "evaluate_all", snapshot)
+                plan = ExamRunPlan(99, 0, 90, 98, 100)
+                paper = server.create_paper(CANDIDATE, sample_bank, plan=plan)
+                result = await answer_mock_exam(page, server, paper, validate_bank(sample_bank), progress, plan=plan)
+                assert result.planned_seconds == 0 and result.score == 99
+                assert tampered and any("首次复核" in s for s in steps)
+                assert any("提交前再次复核" in s for s in steps)
+                assert any("恢复" in s for s in steps)
+                assert server.result_for(paper).score == 99
+            finally:
+                await browser.close()
+    try:
+        asyncio.run(run())
+    finally:
+        server.close()
 
 
 def test_one_minute_real_clock_submission(sample_bank):

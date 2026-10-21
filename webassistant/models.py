@@ -5,6 +5,8 @@ import math
 
 
 DEFAULT_URL = "https://ks.cqsdx.cn/exam/"
+DEFAULT_SCORE_MIN = 98
+DEFAULT_SCORE_MAX = 100
 
 
 @dataclass(frozen=True)
@@ -63,8 +65,8 @@ class PracticeOptions:
     minutes_min: float = 10.0
     minutes_max: float = 10.0
     minimum_score: int = 90
-    score_min: int = 91
-    score_max: int = 99
+    score_min: int = DEFAULT_SCORE_MIN
+    score_max: int = DEFAULT_SCORE_MAX
 
     def validate(self):
         if (not math.isfinite(self.minutes_min) or not math.isfinite(self.minutes_max)

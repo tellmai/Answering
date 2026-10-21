@@ -24,7 +24,7 @@ function updateProgress() {
 function render(data) {
   paper = data;
   const started = performance.now();
-  byId("timingMode").textContent = data.plannedSeconds ? `计划用时 ${(data.plannedSeconds / 60).toFixed(1)} 分钟` : "最快完成 · 不额外等待";
+  byId("timingMode").textContent = data.plannedSeconds ? `计划用时 ${(data.plannedSeconds / 60).toFixed(1)} 分钟` : "最快完成 · 仍校验答案";
   byId("scorePolicy").textContent = data.scoreRange ? `模拟分数范围 ${data.scoreRange[0]}–${data.scoreRange[1]} 分 · 最低 ${data.minimumScore} 分` : "每题 1 分 · 满分 100 分";
   clockTimer = setInterval(() => {
     const seconds = Math.floor((performance.now() - started) / 1000);

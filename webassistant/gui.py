@@ -4,17 +4,17 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QByteArray, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
     QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
-    QSpinBox, QVBoxLayout, QWidget,
+    QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from .controller import BrowserWorker
 from .importers import load_bank, load_identities
-from .models import DEFAULT_URL, SiteConfig, PracticeOptions, ExecutionOptions
+from .models import DEFAULT_URL, DEFAULT_SCORE_MIN, DEFAULT_SCORE_MAX, SiteConfig, PracticeOptions, ExecutionOptions
 from .privacy import redact
 from .batch import LABELS, status_text
 from .mock_exam import validate_bank
@@ -135,7 +135,7 @@ class MainWindow(QMainWindow):
         test_row = QHBoxLayout()
         self.test_mode = QCheckBox("测试开关：登录成功后进入本地 100 题模拟考试")
         self.test_mode.setObjectName("testModeSwitch")
-        self.test_mode.setToolTip("先导入含三种题型且不少于 100 题的题库。开启后生成预览；每人登录成功后重新抽题，自动作答并独立评分。")
+        self.test_mode.setToolTip("只切换批次流程，不打开试卷。导入不少于 100 题且包含三种题型的题库后，可点击预览试卷；每人登录成功后重新抽题、作答并校验。")
         self.test_mode.toggled.connect(self._test_toggled)
         self.preview_test_button = QPushButton("重新生成 / 预览试卷")
         self.preview_test_button.clicked.connect(lambda: self._start_job("preview"))
@@ -152,7 +152,8 @@ class MainWindow(QMainWindow):
             time_row.addWidget(box)
             if box is self.minutes_min:
                 time_row.addWidget(QLabel("至"))
-        self.fastest = QCheckBox("最快完成（不额外等待）")
+        self.fastest = QCheckBox("最快完成（仍进行两次答案校验）")
+        self.fastest.setToolTip("跳过计时等待，仍复核全部答案两次，并核对提交后的实际评分；校验失败不会记为完成。")
         self.fastest.setChecked(self.settings.value("fastest", False, type=bool))
         self.fastest.toggled.connect(self._update_controls)
         time_row.addWidget(self.fastest)
@@ -161,7 +162,7 @@ class MainWindow(QMainWindow):
         form.addRow("答题用时范围", time_row)
         score_row = QHBoxLayout()
         self.minimum_score, self.score_min, self.score_max = QSpinBox(), QSpinBox(), QSpinBox()
-        for box, key, default in ((self.minimum_score, "minimum_score", 90), (self.score_min, "score_min", 91), (self.score_max, "score_max", 99)):
+        for box, key, default in ((self.minimum_score, "minimum_score", 90), (self.score_min, "score_min", DEFAULT_SCORE_MIN), (self.score_max, "score_max", DEFAULT_SCORE_MAX)):
             box.setRange(0, 100)
             box.setSuffix(" 分")
             box.setValue(self.settings.value(key, default, type=int))
@@ -175,7 +176,10 @@ class MainWindow(QMainWindow):
         form.addRow("确保最低分", score_row)
         layout.addWidget(config)
 
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = self.info_splitter = QSplitter(Qt.Horizontal)
+        splitter.setObjectName("identityBankSplitter")
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(8)
         left = QGroupBox("身份信息")
         ll = QVBoxLayout(left)
         self.identity_button = QPushButton("导入身份文件 (.xlsx)")
@@ -218,17 +222,24 @@ class MainWindow(QMainWindow):
         search_row.addWidget(self.kind)
         rl.addLayout(search_row)
         self.question_list = QListWidget()
+        self.question_list.setMinimumHeight(40)
+        self.question_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         self.question_list.setMaximumHeight(140)
         self.question_list.currentRowChanged.connect(self._preview_question)
         rl.addWidget(self.question_list)
         self.preview = QPlainTextEdit()
-        self.preview.setMinimumHeight(110)
+        self.preview.setMinimumHeight(50)
+        self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         self.preview.setReadOnly(True)
         self.preview.setPlaceholderText("导入题库后，可在这里查看题干、选项、正确答案和来源页码")
         rl.addWidget(self.preview)
         splitter.addWidget(right)
         splitter.setSizes([520, 620])
-        layout.addWidget(splitter, 1)
+        self.content_splitter = QSplitter(Qt.Vertical)
+        self.content_splitter.setObjectName("informationResultsSplitter")
+        self.content_splitter.setChildrenCollapsible(False)
+        self.content_splitter.setHandleWidth(8)
+        self.content_splitter.addWidget(splitter)
 
         progress_box = QGroupBox("批量处理进度与本地模拟成绩")
         pl = QVBoxLayout(progress_box)
@@ -248,7 +259,7 @@ class MainWindow(QMainWindow):
             table.verticalHeader().hide()
             self.result_tables[key] = table
             self.result_tabs.addTab(table, label)
-        self.result_tabs.setMaximumHeight(90)
+        self.result_tabs.setMinimumHeight(90)
         pl.addWidget(self.result_tabs)
         result_row = QHBoxLayout()
         self.result_location = QLabel("每批次独立保存已完成、未完成两份 Excel；统计文件含完整身份信息")
@@ -262,7 +273,19 @@ class MainWindow(QMainWindow):
         result_row.addWidget(self.open_results_button)
         result_row.addWidget(self.export_button)
         pl.addLayout(result_row)
-        layout.addWidget(progress_box)
+        self.content_splitter.addWidget(progress_box)
+        self.content_splitter.setSizes([320, 220])
+        self.content_splitter.setStretchFactor(0, 3)
+        self.content_splitter.setStretchFactor(1, 2)
+        for pane, key in ((self.info_splitter, "layout/infoSplitter"), (self.content_splitter, "layout/contentSplitter")):
+            state = self.settings.value(key)
+            if isinstance(state, QByteArray):
+                pane.restoreState(state)
+            pane.setChildrenCollapsible(False)
+            for index in range(pane.count()):
+                pane.setCollapsible(index, False)
+            pane.splitterMoved.connect(lambda _pos, _index, pane=pane, key=key: self.settings.setValue(key, pane.saveState()))
+        layout.addWidget(self.content_splitter, 1)
 
         buttons = QHBoxLayout()
         self.inspect_button = QPushButton("环境检测")
@@ -302,8 +325,16 @@ class MainWindow(QMainWindow):
             QPushButton:disabled { color: #8995a5; background: #eff1f5; }
             QPushButton#startLogin { background: #2464ac; color: white; border: none; }
             QPushButton#startLogin:disabled { background: #a9bdd4; }
+            QSplitter::handle { background: #d8dfeb; border-radius: 3px; }
+            QSplitter::handle:hover { background: #8faacb; }
             QLineEdit, QPlainTextEdit, QListWidget, QTableWidget { background: white; padding: 4px; border: 1px solid #ccd5e0; border-radius: 3px; }
         """)
+        self._sync_information_height()
+
+    def _sync_information_height(self):
+        # Splitter minimums must follow wrapped summaries after data is imported.
+        self.info_splitter.setMinimumHeight(self.info_splitter.minimumSizeHint().height())
+        self.setMinimumHeight(max(880, self.centralWidget().minimumSizeHint().height()))
 
     def _ready(self):
         self.backend_ready = True
@@ -323,7 +354,7 @@ class MainWindow(QMainWindow):
         self.inspect_button.setEnabled(self.backend_ready and not locked)
         self.stop_button.setEnabled((self.busy or bool(self.import_workers)) and not self._closing)
         self.export_button.setEnabled(self.backend_ready and not locked and bool(self.result_folder))
-        self.preview_test_button.setEnabled(self.backend_ready and not locked and self.test_mode.isChecked())
+        self.preview_test_button.setEnabled(self.backend_ready and not locked)
         self.start_button.setText("启动登录与本地模拟测试" if self.test_mode.isChecked() else "启动批量登录")
         self.open_results_button.setEnabled(bool(self.result_folder))
         for widget in (self.url, self.chrome, self.chrome_button, self.output_root, self.output_button, self.identity_button, self.bank_button, self.test_mode, self.fastest, self.minimum_score, self.score_min, self.score_max, self.concurrency, self.background):
@@ -349,16 +380,7 @@ class MainWindow(QMainWindow):
 
     def _test_toggled(self, enabled):
         if enabled:
-            try:
-                validate_bank(self.questions)
-            except ValueError as error:
-                self.test_mode.blockSignals(True)
-                self.test_mode.setChecked(False)
-                self.test_mode.blockSignals(False)
-                self.show_status(str(error))
-            else:
-                self.show_status("测试开关已开启，正在生成本地模拟试卷预览")
-                self._start_job("preview")
+            self.show_status("测试开关已开启：启动批次后执行本地模拟测试；点击「预览试卷」可单独查看")
         else:
             self.show_status("测试开关已关闭：后续启动仅验证登录")
         self._update_controls()
@@ -413,6 +435,7 @@ class MainWindow(QMainWindow):
         self.show_status(f"身份导入完成：有效 {len(self.candidates)} 人，问题 {len(result.issues)} 行")
         for issue in result.issues:
             self.show_status(issue)
+        self._sync_information_height()
         self._update_controls()
 
     def bank_loaded(self, result, filename=""):
@@ -423,6 +446,7 @@ class MainWindow(QMainWindow):
         self.show_status(f"题库解析完成：{len(self.questions)} 题，异常 {len(result.issues)} 题")
         for issue in result.issues:
             self.show_status(issue)
+        self._sync_information_height()
 
     def _filter_questions(self):
         keyword = self.search.text().strip().casefold()
@@ -460,7 +484,7 @@ class MainWindow(QMainWindow):
         try:
             config = SiteConfig(self.url.text().strip(), self.chrome.text().strip())
             config.validate()
-            testing = self.test_mode.isChecked() and kind in ("login", "preview")
+            testing = kind == "preview" or (self.test_mode.isChecked() and kind == "login")
             options = PracticeOptions(self.fastest.isChecked(), self.minutes_min.value(), self.minutes_max.value(), self.minimum_score.value(), self.score_min.value(), self.score_max.value())
             execution = ExecutionOptions(self.concurrency.value(), self.background.isChecked())
             execution.validate()

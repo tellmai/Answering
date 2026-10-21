@@ -168,7 +168,7 @@ class BrowserWorker(QThread):
                 page = await self.preview_browser.new_page(viewport={"width": 1440, "height": 1000}, locale="zh-CN")
                 await page.goto(self.preview_server.url_for(paper), wait_until="domcontentloaded")
                 await page.locator("article.question").nth(99).wait_for()
-                self.completed.emit("测试开关已开启：已生成 100 题本地模拟试卷预览；每题 1 分，满分 100 分")
+                self.completed.emit("已生成 100 题本地模拟试卷预览；每题 1 分，满分 100 分，预览成绩不计入人员统计")
             elif kind == "export":
                 if self.last_store:
                     self.last_store.persist()
