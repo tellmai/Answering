@@ -18,9 +18,14 @@ def main():
     if args.smoke_test:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import QStandardPaths, QTimer, Qt
-    from PySide6.QtGui import QFont, QFontDatabase
+    from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
     from PySide6.QtWidgets import QApplication
     app = QApplication(sys.argv[:1])
+    app.setStyle("Fusion")
+    palette = app.palette()
+    palette.setColor(QPalette.Highlight, QColor("#087f73"))
+    palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    app.setPalette(palette)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(__version__)
     app.setOrganizationName("LocalTools")
@@ -138,6 +143,26 @@ def main():
                 window.result_tabs.setCurrentIndex(1)
                 assert (store.folder / "已完成信息统计.xlsx").is_file()
                 app.processEvents()
+                from PySide6.QtGui import QImageReader
+                from webassistant.ui import UI_ASSETS
+                smoke_result["ui_assets"] = all(not QImageReader(str(UI_ASSETS / name)).read().isNull() for name in ("check.svg", "chevron-up.svg", "chevron-down.svg"))
+                assert smoke_result["ui_assets"], "界面图标未随软件打包或无法渲染"
+                window.log_toggle.click()
+                app.processEvents()
+                assert window.log_drawer.isVisible()
+                window.grab().save(str(output / "运行记录.png"))
+                window.log_toggle.click()
+                window.settings_tabs.setCurrentIndex(1)
+                app.processEvents()
+                assert window.url.isVisible() and window.output_root.isVisible()
+                window.grab().save(str(output / "连接设置.png"))
+                window.settings_tabs.setCurrentIndex(0)
+                app.processEvents()
+                smoke_result["workspace_design"] = (window.settings_tabs.count() == 2
+                    and window.question_splitter.count() == 2
+                    and window.batch_progress.value() == window.batch_progress.maximum() == 1
+                    and not window.log_drawer.isVisible())
+                assert smoke_result["workspace_design"]
                 window.grab().save(str(output / "界面预览.png"))
                 smoke_result.update(ok=window.backend_ready, gui=True, ocr_model=True, chrome_detected=bool(find_chrome()), chrome_launch=True, batch_statistics=True, mock_exam=True, mock_score=result.score, mock_target=result.target_score, mock_total=result.total, document_libraries=True, browser_backend=window.backend_ready, frozen=bool(getattr(sys, "frozen", False)), python_version=sys.version.split()[0])
             except Exception as error:

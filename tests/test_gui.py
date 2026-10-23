@@ -5,7 +5,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QPoint, QRect, QSettings, Qt
 from webassistant.gui import MainWindow
 from webassistant.models import Candidate, IdentityImport
 
@@ -90,6 +90,13 @@ def test_stop_choices_and_batch_views(tmp_path, monkeypatch, choice, expected):
         window._person_updated(store.update(1, status="failed", reason="演示失败"))
         assert window.result_tables["completed"].rowCount() == 1
         assert window.result_tables["failed"].rowCount() == 1
+        assert window.batch_progress.value() == window.batch_progress.maximum() == 2
+        assert window.progress_caption.text() == "2 / 2 人已处理"
+        assert "失败/中止 1" in window.batch_progress.accessibleDescription()
+        window._person_updated(store.update(1, status="stopped", reason="已手动中止"))
+        assert window.result_tables["failed"].rowCount() == 1
+        assert window.batch_progress.value() == 2
+        assert "失败/中止 1" in window.batch_progress.accessibleDescription()
         controls = []
         for method, label in (("pause_queue", "pause"), ("stop_after_current", "after"), ("stop_job", "now"), ("resume_queue", "resume")):
             monkeypatch.setattr(window.backend, method, lambda value=label: controls.append(value))
@@ -191,7 +198,7 @@ def test_splitter_resize_keeps_sections_visible_and_restores_proportions(sample_
         wait_until(app, lambda: window.backend_ready)
         window.bank_loaded(BankImport(sample_bank, [], 1), "演示题库.pdf")
         app.processEvents()
-        assert window.preview.y() + window.preview.height() <= window.preview.parentWidget().contentsRect().bottom()
+        assert window.preview.parentWidget().contentsRect().contains(window.preview.geometry())
         window.resize(1280, 1280)
         app.processEvents()
         assert window.content_splitter.orientation() == Qt.Vertical
@@ -199,14 +206,17 @@ def test_splitter_resize_keeps_sections_visible_and_restores_proportions(sample_
         before = window.content_splitter.sizes()
         window.content_splitter.moveSplitter(before[0] + 65, 1)
         window.info_splitter.moveSplitter(620, 1)
+        window.question_splitter.moveSplitter(260, 1)
         app.processEvents()
         sizes = window.content_splitter.sizes()
         info_sizes = window.info_splitter.sizes()
+        question_sizes = window.question_splitter.sizes()
         assert sizes != before and min(sizes) > 0
         assert all(not window.content_splitter.isCollapsible(i) for i in range(2))
         assert window.result_tabs.maximumHeight() > 90
         assert window.settings.contains("layout/contentSplitter")
         assert window.settings.contains("layout/infoSplitter")
+        assert window.settings.contains("layout/questionSplitter")
     finally:
         window.close()
         wait_until(app, lambda: not window.backend.isRunning())
@@ -220,7 +230,53 @@ def test_splitter_resize_keeps_sections_visible_and_restores_proportions(sample_
         app.processEvents()
         assert all(abs(a - b) <= 2 for a, b in zip(sizes, restored.content_splitter.sizes()))
         assert all(abs(a - b) <= 2 for a, b in zip(info_sizes, restored.info_splitter.sizes()))
+        assert all(abs(a - b) <= 2 for a, b in zip(question_sizes, restored.question_splitter.sizes()))
     finally:
         restored.close()
         wait_until(app, lambda: not restored.backend.isRunning())
+        app.processEvents()
+
+
+@pytest.mark.parametrize("size", [(1000, 700), (1280, 800), (1360, 920)])
+def test_workspace_fits_small_windows_and_logs_do_not_cover_actions(size, sample_bank, chinese_ui_font):
+    from webassistant.models import BankImport
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.resize(*size)
+    window.show()
+    try:
+        wait_until(app, lambda: window.backend_ready)
+        assert not window.people.empty_hint.isHidden()
+        window.identities_loaded(IdentityImport([Candidate(2, "黔江区", "演示甲", "110101199001010010")], [], "Sheet1"))
+        assert window.people.empty_hint.isHidden()
+        window.bank_loaded(BankImport(sample_bank, [], 1), "演示题库.pdf")
+        window.show_status("很长的运行记录：" + "本地模拟校验已完成；" * 20)
+        assert window.status.toolTip() == window.status.text()
+        for logs_open in (False, True):
+            window.log_toggle.setChecked(logs_open)
+            app.processEvents()
+            assert window.log_drawer.isVisible() == logs_open
+            assert window.size().toTuple() == size
+            for widget in (window.settings_tabs, window.start_button, window.log_toggle):
+                bounds = QRect(widget.mapTo(window.centralWidget(), QPoint(0, 0)), widget.size())
+                assert window.centralWidget().rect().contains(bounds)
+            page = window.settings_tabs.widget(0)
+            for widget in (window.concurrency, window.background, window.test_mode, window.fastest, window.score_max):
+                bounds = QRect(widget.mapTo(page, QPoint(0, 0)), widget.size())
+                assert page.rect().contains(bounds)
+            results = window.content_splitter.widget(1)
+            assert results.rect().contains(window.result_tabs.geometry())
+            assert window.result_tabs.geometry().bottom() < window.open_results_button.y()
+            window.workspace_scroll.ensureWidgetVisible(window.open_results_button)
+            app.processEvents()
+            bounds = QRect(window.open_results_button.mapTo(window.workspace_scroll.viewport(), QPoint(0, 0)), window.open_results_button.size())
+            assert window.workspace_scroll.viewport().rect().contains(bounds)
+        window.settings_tabs.setCurrentIndex(1)
+        app.processEvents()
+        assert window.url.isVisible() and window.chrome.isVisible() and window.output_root.isVisible()
+        window.settings_tabs.setCurrentIndex(0)
+        assert window.concurrency.isVisible() and window.background.isVisible()
+    finally:
+        window.close()
+        wait_until(app, lambda: not window.backend.isRunning())
         app.processEvents()

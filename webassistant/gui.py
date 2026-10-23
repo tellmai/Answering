@@ -4,11 +4,12 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QByteArray, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
+    QApplication, QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
-    QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
+    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QTableWidgetItem, QTabWidget,
     QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -16,10 +17,11 @@ from .controller import BrowserWorker
 from .importers import load_bank, load_identities
 from .models import DEFAULT_URL, DEFAULT_SCORE_MIN, DEFAULT_SCORE_MAX, SiteConfig, PracticeOptions, ExecutionOptions
 from .privacy import redact
-from .batch import LABELS, status_text
+from .batch import status_text
 from .mock_exam import validate_bank
-from . import APP_NAME
+from . import APP_NAME, __version__
 from .settings import load_settings
+from .ui import ACCENT, STYLESHEET, ElidedLabel, EmptyTable, WorkspaceSplitter, icon
 
 
 class ImportWorker(QThread):
@@ -53,8 +55,12 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1280, 1040)
-        self.setMinimumSize(1100, 880)
+        self.setWindowIcon(icon("brand"))
+        self.resize(1360, 920)
+        self.setMinimumSize(1000, 700)
+        if QApplication.platformName() != "offscreen":
+            available = self.screen().availableGeometry()
+            self.resize(min(1360, available.width() - 40), min(920, available.height() - 40))
         self.settings = load_settings()
         self.candidates, self.questions = [], []
         self.rejected = []
@@ -86,198 +92,309 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         root = QWidget()
+        root.setObjectName("workspace")
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
-        layout.setSpacing(5)
-        title = QLabel(APP_NAME)
-        title.setStyleSheet("font-size:20px;font-weight:600;color:#20334c")
-        layout.addWidget(title)
-        layout.addWidget(QLabel("逐人登录 · 本地 100 题模拟测试，每题 1 分 · 可设置用时、最低分和分数范围 · 停止时保留网页"))
+        layout.setContentsMargins(22, 16, 22, 16)
+        layout.setSpacing(10)
 
-        config = QGroupBox("网站与浏览器")
-        form = QFormLayout(config)
-        self.url = QLineEdit(self.settings.value("url", DEFAULT_URL))
-        self.url.setObjectName("urlInput")
-        form.addRow("网站入口", self.url)
-        chrome_row = QHBoxLayout()
-        self.chrome = QLineEdit(self.settings.value("chrome", ""))
-        self.chrome.setPlaceholderText("留空：Chrome → Edge → 其他兼容浏览器 → 随附 Chrome")
-        self.chrome.setObjectName("chromePath")
-        self.chrome_button = QPushButton("选择浏览器")
-        self.chrome_button.clicked.connect(self._select_chrome)
-        chrome_row.addWidget(self.chrome, 1)
-        chrome_row.addWidget(self.chrome_button)
-        form.addRow("浏览器路径", chrome_row)
-        output_row = QHBoxLayout()
-        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
-        self.output_root = QLineEdit(self.settings.value("output_root", str(base / "results")))
-        self.output_button = QPushButton("选择结果目录")
-        self.output_button.clicked.connect(self._select_output)
-        output_row.addWidget(self.output_root, 1)
-        output_row.addWidget(self.output_button)
-        form.addRow("统计保存位置", output_row)
-        execution_row = QHBoxLayout()
+        def label(text, role="muted"):
+            widget = QLabel(text)
+            widget.setProperty("role", role)
+            return widget
+
+        def card(title, count=None, action=None):
+            frame = QFrame()
+            frame.setProperty("role", "card")
+            box = QVBoxLayout(frame)
+            box.setContentsMargins(14, 12, 14, 12)
+            box.setSpacing(8)
+            heading = QHBoxLayout()
+            heading.setSpacing(8)
+            heading.addWidget(label(title, "heading"))
+            if count is not None:
+                heading.addWidget(count, 0, Qt.AlignVCenter)
+            heading.addStretch(1)
+            if action is not None:
+                heading.addWidget(action)
+            box.addLayout(heading)
+            return frame, box
+
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        brand = QLabel()
+        brand.setPixmap(icon("brand").pixmap(QSize(44, 44)))
+        header.addWidget(brand)
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(0)
+        title = QLabel(APP_NAME)
+        title.setObjectName("brandTitle")
+        caption = QLabel("批量登录与本地模拟工作台")
+        caption.setObjectName("brandCaption")
+        brand_text.addWidget(title)
+        brand_text.addWidget(caption)
+        header.addLayout(brand_text)
+        header.addStretch(1)
+        version = QLabel(f"v{__version__}")
+        version.setObjectName("versionBadge")
+        header.addWidget(version, 0, Qt.AlignVCenter)
+        self.activity_badge = QLabel("●  正在初始化")
+        self.activity_badge.setObjectName("activityBadge")
+        header.addWidget(self.activity_badge, 0, Qt.AlignVCenter)
+        layout.addLayout(header)
+
+        self.settings_tabs = QTabWidget()
+        self.settings_tabs.setObjectName("settingsTabs")
+        self.settings_tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        execution_page = QWidget()
+        execution_layout = QHBoxLayout(execution_page)
+        execution_layout.setContentsMargins(16, 12, 16, 12)
+        execution_layout.setSpacing(20)
+        run_options = QVBoxLayout()
+        run_options.setSpacing(9)
         self.concurrency = QSpinBox()
         self.concurrency.setObjectName("flowConcurrency")
         self.concurrency.setRange(1, 30)
         self.concurrency.setValue(self.settings.value("concurrency", 10, type=int))
         self.concurrency.setSuffix(" 人")
+        self.concurrency.setFixedWidth(95)
+        self.concurrency.setAccessibleName("并发数量")
         self.concurrency.setToolTip("每个人从登录到本地模拟测试结束占一个名额，完成或失败后自动补位。")
+        concurrent_row = QHBoxLayout()
+        concurrent_row.addWidget(label("并发数量", "eyebrow"))
+        concurrent_row.addStretch(1)
+        concurrent_row.addWidget(self.concurrency)
+        run_options.addLayout(concurrent_row)
         self.background = QCheckBox("后台执行（隐藏浏览器）")
         self.background.setObjectName("backgroundExecution")
         self.background.setChecked(self.settings.value("background", True, type=bool))
         self.background.setToolTip("本批次浏览器不显示窗口、不抢占前台；仍可查看成绩、日志和停止任务。预览试卷始终单独显示。")
-        execution_row.addWidget(self.concurrency)
-        execution_row.addWidget(self.background)
-        execution_row.addStretch(1)
-        execution_row.addWidget(QLabel("独立身份会话 · 完成后自动补位"))
-        form.addRow("并发数量", execution_row)
-        test_row = QHBoxLayout()
-        self.test_mode = QCheckBox("测试开关：登录成功后进入本地 100 题模拟考试")
+        run_options.addWidget(self.background)
+        run_options.addWidget(label("独立身份会话 · 完成后自动补位"))
+        run_options.addStretch(1)
+        execution_layout.addLayout(run_options, 1)
+        divider = QFrame()
+        divider.setObjectName("settingsDivider")
+        divider.setFixedWidth(1)
+        execution_layout.addWidget(divider)
+        practice = QVBoxLayout()
+        practice.setSpacing(8)
+        self.test_mode = QCheckBox("测试开关 · 登录后进行本地模拟")
         self.test_mode.setObjectName("testModeSwitch")
         self.test_mode.setToolTip("只切换批次流程，不打开试卷。导入不少于 100 题且包含三种题型的题库后，可点击预览试卷；每人登录成功后重新抽题、作答并校验。")
         self.test_mode.toggled.connect(self._test_toggled)
-        self.preview_test_button = QPushButton("重新生成 / 预览试卷")
+        self.preview_test_button = QPushButton("预览试卷")
+        self.preview_test_button.setIcon(icon("log", ACCENT))
+        self.preview_test_button.setToolTip("重新抽取 100 题并打开预览；测试开关关闭时也可查看。")
         self.preview_test_button.clicked.connect(lambda: self._start_job("preview"))
-        test_row.addWidget(self.test_mode, 1)
+        test_row = QHBoxLayout()
+        test_row.addWidget(self.test_mode)
+        test_row.addStretch(1)
+        test_row.addWidget(label("每卷 100 题 / 每题 1 分"))
         test_row.addWidget(self.preview_test_button)
-        form.addRow("本地模拟测试", test_row)
+        practice.addLayout(test_row)
         time_row = QHBoxLayout()
+        time_row.setSpacing(8)
+        time_row.addWidget(label("答题用时", "eyebrow"))
         self.minutes_min, self.minutes_max = QDoubleSpinBox(), QDoubleSpinBox()
         for box, key in ((self.minutes_min, "minutes_min"), (self.minutes_max, "minutes_max")):
             box.setRange(1, 180)
             box.setDecimals(1)
             box.setSuffix(" 分钟")
+            box.setFixedWidth(109)
+            box.setAccessibleName("最短答题用时" if key == "minutes_min" else "最长答题用时")
             box.setValue(self.settings.value(key, 10.0, type=float))
             time_row.addWidget(box)
             if box is self.minutes_min:
-                time_row.addWidget(QLabel("至"))
+                time_row.addWidget(label("至"))
         self.fastest = QCheckBox("最快完成（仍进行两次答案校验）")
         self.fastest.setToolTip("跳过计时等待，仍复核全部答案两次，并核对提交后的实际评分；校验失败不会记为完成。")
         self.fastest.setChecked(self.settings.value("fastest", False, type=bool))
         self.fastest.toggled.connect(self._update_controls)
+        time_row.addSpacing(8)
         time_row.addWidget(self.fastest)
         time_row.addStretch(1)
-        time_row.addWidget(QLabel("从进入本地试卷计时，默认 10 分钟"))
-        form.addRow("答题用时范围", time_row)
+        practice.addLayout(time_row)
         score_row = QHBoxLayout()
+        score_row.setSpacing(8)
         self.minimum_score, self.score_min, self.score_max = QSpinBox(), QSpinBox(), QSpinBox()
         for box, key, default in ((self.minimum_score, "minimum_score", 90), (self.score_min, "score_min", DEFAULT_SCORE_MIN), (self.score_max, "score_max", DEFAULT_SCORE_MAX)):
             box.setRange(0, 100)
             box.setSuffix(" 分")
+            box.setFixedWidth(87)
             box.setValue(self.settings.value(key, default, type=int))
+            box.setAccessibleName({"minimum_score": "确保最低分", "score_min": "得分下限", "score_max": "得分上限"}[key])
+        score_row.addWidget(label("确保最低分", "eyebrow"))
         score_row.addWidget(self.minimum_score)
-        score_row.addWidget(QLabel("得分范围"))
+        score_row.addSpacing(8)
+        score_row.addWidget(label("得分范围", "eyebrow"))
         score_row.addWidget(self.score_min)
-        score_row.addWidget(QLabel("至"))
+        score_row.addWidget(label("至"))
         score_row.addWidget(self.score_max)
         score_row.addStretch(1)
-        score_row.addWidget(QLabel("仅本地模拟；批量轮换分数，至少两种整数分"))
-        form.addRow("确保最低分", score_row)
-        layout.addWidget(config)
+        score_row.addWidget(label("仅用于本地模拟"))
+        practice.addLayout(score_row)
+        execution_layout.addLayout(practice, 3)
+        self.settings_tabs.addTab(execution_page, icon("sliders", ACCENT), "执行与模拟")
 
-        splitter = self.info_splitter = QSplitter(Qt.Horizontal)
-        splitter.setObjectName("identityBankSplitter")
-        splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(8)
-        left = QGroupBox("身份信息")
-        ll = QVBoxLayout(left)
-        self.identity_button = QPushButton("导入身份文件 (.xlsx)")
+        connection_page = QWidget()
+        form = QFormLayout(connection_page)
+        form.setContentsMargins(16, 12, 16, 12)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(8)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self.url = QLineEdit(self.settings.value("url", DEFAULT_URL))
+        self.url.setObjectName("urlInput")
+        self.url.setAccessibleName("网站入口")
+        form.addRow(label("网站入口", "eyebrow"), self.url)
+        chrome_row = QHBoxLayout()
+        self.chrome = QLineEdit(self.settings.value("chrome", ""))
+        self.chrome.setPlaceholderText("自动选择 Chrome / Edge，未安装时使用随附 Chrome")
+        self.chrome.setObjectName("chromePath")
+        self.chrome.setAccessibleName("浏览器路径")
+        self.chrome_button = QPushButton("选择浏览器")
+        self.chrome_button.setIcon(icon("folder"))
+        self.chrome_button.clicked.connect(self._select_chrome)
+        chrome_row.addWidget(self.chrome, 1)
+        chrome_row.addWidget(self.chrome_button)
+        form.addRow(label("浏览器路径", "eyebrow"), chrome_row)
+        output_row = QHBoxLayout()
+        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+        self.output_root = QLineEdit(self.settings.value("output_root", str(base / "results")))
+        self.output_root.setAccessibleName("统计保存位置")
+        self.output_button = QPushButton("选择结果目录")
+        self.output_button.setIcon(icon("folder"))
+        self.output_button.clicked.connect(self._select_output)
+        output_row.addWidget(self.output_root, 1)
+        output_row.addWidget(self.output_button)
+        form.addRow(label("统计保存位置", "eyebrow"), output_row)
+        self.settings_tabs.addTab(connection_page, icon("connection"), "连接与保存")
+        layout.addWidget(self.settings_tabs)
+
+        self.info_splitter = WorkspaceSplitter(Qt.Horizontal)
+        self.info_splitter.setObjectName("identityBankSplitter")
+        self.info_splitter.setHandleWidth(12)
+        self.identity_button = QPushButton("导入身份 .xlsx")
+        self.identity_button.setProperty("role", "import")
         self.identity_button.setObjectName("importIdentity")
+        self.identity_button.setIcon(icon("upload", ACCENT))
         self.identity_button.clicked.connect(lambda: self._choose_file("identity"))
-        ll.addWidget(self.identity_button)
-        self.identity_summary = QLabel("尚未导入；表头：所在的区县、姓名、身份证号")
-        self.identity_summary.setWordWrap(True)
+        self.identity_count = label("0 人", "count")
+        left, ll = card("身份信息", self.identity_count, self.identity_button)
+        self.identity_summary = ElidedLabel("导入 Excel 后查看人员；身份证号始终脱敏显示")
+        self.identity_summary.setProperty("role", "muted")
         ll.addWidget(self.identity_summary)
-        self.people = QTableWidget(0, 6)
+        self.people = EmptyTable("尚未导入身份\n点击右上角「导入身份」开始")
         self.people.setHorizontalHeaderLabels(["行号", "区县", "姓名", "身份证号（脱敏）", "状态", "模拟得分"])
-        self.people.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.people.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.people.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.people.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.people.horizontalHeader().setStretchLastSection(True)
-        self.people.verticalHeader().hide()
+        self._style_table(self.people)
         self.people.itemSelectionChanged.connect(self._update_controls)
-        ll.addWidget(self.people)
-        splitter.addWidget(left)
+        ll.addWidget(self.people, 1)
+        self.info_splitter.addWidget(left)
 
-        right = QGroupBox("题库搜索与预览")
-        rl = QVBoxLayout(right)
-        rl.setSpacing(4)
-        self.bank_button = QPushButton("导入题库 (.pdf)")
+        self.bank_button = QPushButton("导入题库 .pdf")
+        self.bank_button.setProperty("role", "import")
         self.bank_button.setObjectName("importBank")
+        self.bank_button.setIcon(icon("upload", ACCENT))
         self.bank_button.clicked.connect(lambda: self._choose_file("bank"))
-        rl.addWidget(self.bank_button)
-        self.bank_summary = QLabel("仅登录时题库可选；本地模拟测试需至少 100 题，包含三种题型")
-        self.bank_summary.setWordWrap(True)
+        self.bank_count = label("0 题", "count")
+        right, rl = card("题库搜索与预览", self.bank_count, self.bank_button)
+        self.bank_summary = ElidedLabel("本地模拟需至少 100 题，包含判断、单选和多选")
+        self.bank_summary.setProperty("role", "muted")
         rl.addWidget(self.bank_summary)
         search_row = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("搜索题号、题干或选项")
+        self.search.setPlaceholderText("搜索题号、题干或选项…")
+        self.search.setAccessibleName("搜索题库")
         self.search.textChanged.connect(self._filter_questions)
         self.kind = QComboBox()
+        self.kind.setAccessibleName("筛选题型")
         self.kind.addItems(["全部题型", "判断", "单选", "多选"])
+        self.kind.setMinimumWidth(105)
         self.kind.currentTextChanged.connect(self._filter_questions)
         search_row.addWidget(self.search, 1)
         search_row.addWidget(self.kind)
         rl.addLayout(search_row)
+        self.question_splitter = WorkspaceSplitter(Qt.Horizontal)
+        self.question_splitter.setHandleWidth(10)
         self.question_list = QListWidget()
-        self.question_list.setMinimumHeight(40)
-        self.question_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
-        self.question_list.setMaximumHeight(140)
+        self.question_list.setAccessibleName("题库题目列表")
+        self.question_list.setMinimumSize(110, 68)
+        self.question_list.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.question_list.setTextElideMode(Qt.ElideRight)
+        self.question_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.question_list.currentRowChanged.connect(self._preview_question)
-        rl.addWidget(self.question_list)
         self.preview = QPlainTextEdit()
-        self.preview.setMinimumHeight(50)
-        self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+        self.preview.setObjectName("questionPreview")
+        self.preview.setAccessibleName("题目内容与答案预览")
+        self.preview.setMinimumSize(150, 68)
+        self.preview.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.preview.setReadOnly(True)
-        self.preview.setPlaceholderText("导入题库后，可在这里查看题干、选项、正确答案和来源页码")
-        rl.addWidget(self.preview)
-        splitter.addWidget(right)
-        splitter.setSizes([520, 620])
-        self.content_splitter = QSplitter(Qt.Vertical)
+        self.preview.setPlaceholderText("题目预览\n\n导入题库并选择题目，\n查看题干、选项、答案与来源。")
+        self.question_splitter.addWidget(self.question_list)
+        self.question_splitter.addWidget(self.preview)
+        self.question_splitter.setSizes([240, 330])
+        rl.addWidget(self.question_splitter, 1)
+        self.info_splitter.addWidget(right)
+        self.info_splitter.setSizes([540, 670])
+        self.content_splitter = WorkspaceSplitter(Qt.Vertical)
         self.content_splitter.setObjectName("informationResultsSplitter")
-        self.content_splitter.setChildrenCollapsible(False)
-        self.content_splitter.setHandleWidth(8)
-        self.content_splitter.addWidget(splitter)
+        self.content_splitter.setHandleWidth(12)
+        self.content_splitter.addWidget(self.info_splitter)
 
-        progress_box = QGroupBox("批量处理进度与本地模拟成绩")
-        pl = QVBoxLayout(progress_box)
-        self.current_person = QLabel("当前人员：尚未开始")
+        progress_box, pl = card("批量进度与本地模拟成绩")
+        metrics = pl.itemAt(0).layout()
+        metrics.setSpacing(18)
+        self.metric_labels = {}
+        for key, caption, color in (("running", "正在进行", "#4679a8"), ("completed", "已完成", ACCENT), ("failed", "失败 / 中止", "#b06760"), ("pending", "未开始", "#7a8d91")):
+            metric = QLabel()
+            metric.setTextFormat(Qt.RichText)
+            metric.setProperty("role", "muted")
+            self.metric_labels[key] = (metric, caption, color)
+            metrics.addWidget(metric)
+        self.progress_caption = label("等待开始")
+        self.batch_progress = QProgressBar()
+        self.batch_progress.setAccessibleName("批次完成进度")
+        self.batch_progress.setTextVisible(False)
+        self.batch_progress.setRange(0, 1)
+        self.batch_progress.setValue(0)
+        pl.addWidget(self.batch_progress)
+        self.current_person = ElidedLabel("导入身份并启动批次后，在这里查看实时进度")
+        self.current_person.setObjectName("currentPerson")
         self.current_person.setTextFormat(Qt.PlainText)
-        self.batch_counts = QLabel("已完成 0 · 失败/中止 0 · 未开始 0")
-        pl.addWidget(self.current_person)
-        pl.addWidget(self.batch_counts)
+        current_row = QHBoxLayout()
+        current_row.addWidget(self.current_person, 1)
+        current_row.addWidget(self.progress_caption)
+        pl.addLayout(current_row)
         self.result_tabs = QTabWidget()
+        self.result_tabs.setObjectName("resultTabs")
         self.result_tables = {}
-        for key, label in (("running", "正在进行"), ("completed", "登录验证完成"), ("failed", "失败 / 中止")):
-            table = QTableWidget(0, 6)
+        for key, caption in (("running", "正在进行"), ("completed", "登录验证完成"), ("failed", "失败 / 中止")):
+            table = EmptyTable({"running": "暂无正在执行的任务", "completed": "完成的人员与模拟成绩将显示在这里", "failed": "暂无失败或中止的记录"}[key])
             table.setHorizontalHeaderLabels(["行号", "区县", "姓名", "身份证号（脱敏）", "模拟得分", "结果 / 原因"])
-            table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-            table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-            table.horizontalHeader().setStretchLastSection(True)
-            table.verticalHeader().hide()
+            self._style_table(table)
             self.result_tables[key] = table
-            self.result_tabs.addTab(table, label)
-        self.result_tabs.setMinimumHeight(90)
-        pl.addWidget(self.result_tabs)
+            self.result_tabs.addTab(table, caption)
+        self.result_tabs.setMinimumHeight(110)
+        pl.addWidget(self.result_tabs, 1)
         result_row = QHBoxLayout()
-        self.result_location = QLabel("每批次独立保存已完成、未完成两份 Excel；统计文件含完整身份信息")
+        self.result_location = ElidedLabel("每批次自动保存已完成、未完成两份 Excel")
+        self.result_location.setProperty("role", "muted")
         self.result_location.setTextFormat(Qt.PlainText)
-        self.result_location.setWordWrap(True)
-        self.open_results_button = QPushButton("打开本批次目录")
+        self.open_results_button = QPushButton("打开结果目录")
+        self.open_results_button.setIcon(icon("folder"))
         self.open_results_button.clicked.connect(self._open_results)
-        self.export_button = QPushButton("重新导出结果")
+        self.export_button = QPushButton("重新导出")
+        self.export_button.setIcon(icon("export"))
         self.export_button.clicked.connect(lambda: self._start_job("export"))
         result_row.addWidget(self.result_location, 1)
         result_row.addWidget(self.open_results_button)
         result_row.addWidget(self.export_button)
         pl.addLayout(result_row)
         self.content_splitter.addWidget(progress_box)
-        self.content_splitter.setSizes([320, 220])
-        self.content_splitter.setStretchFactor(0, 3)
-        self.content_splitter.setStretchFactor(1, 2)
-        for pane, key in ((self.info_splitter, "layout/infoSplitter"), (self.content_splitter, "layout/contentSplitter")):
+        self.content_splitter.setSizes([270, 290])
+        self.content_splitter.setStretchFactor(0, 1)
+        self.content_splitter.setStretchFactor(1, 1)
+        for pane, key in ((self.info_splitter, "layout/infoSplitter"), (self.content_splitter, "layout/contentSplitter"), (self.question_splitter, "layout/questionSplitter")):
             state = self.settings.value(key)
             if isinstance(state, QByteArray):
                 pane.restoreState(state)
@@ -285,56 +402,104 @@ class MainWindow(QMainWindow):
             for index in range(pane.count()):
                 pane.setCollapsible(index, False)
             pane.splitterMoved.connect(lambda _pos, _index, pane=pane, key=key: self.settings.setValue(key, pane.saveState()))
-        layout.addWidget(self.content_splitter, 1)
+        self.workspace_scroll = QScrollArea()
+        self.workspace_scroll.setObjectName("workspaceScroll")
+        self.workspace_scroll.setFrameShape(QFrame.NoFrame)
+        self.workspace_scroll.setWidgetResizable(True)
+        self.workspace_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.workspace_scroll.setMinimumHeight(180)
+        self.workspace_scroll.setWidget(self.content_splitter)
+        layout.addWidget(self.workspace_scroll, 1)
 
-        buttons = QHBoxLayout()
+        action_card = QFrame()
+        action_card.setObjectName("actionCard")
+        actions = QHBoxLayout(action_card)
+        actions.setContentsMargins(14, 10, 14, 10)
+        actions.setSpacing(8)
+        self.status = ElidedLabel("正在初始化浏览器控制模块…")
+        self.status.setObjectName("statusMessage")
+        self.status.setTextFormat(Qt.PlainText)
+        actions.addWidget(self.status, 1)
+        self.log_toggle = QPushButton("运行记录")
+        self.log_toggle.setObjectName("toggleLog")
+        self.log_toggle.setIcon(icon("log"))
+        self.log_toggle.setCheckable(True)
+        self.log_toggle.setToolTip("展开 / 收起运行记录与导入问题")
+        actions.addWidget(self.log_toggle)
         self.inspect_button = QPushButton("环境检测")
         self.inspect_button.setObjectName("inspectEnvironment")
-        self.start_button = QPushButton("启动批量登录")
-        self.start_button.setObjectName("startLogin")
+        self.inspect_button.setIcon(icon("inspect"))
+        self.inspect_button.clicked.connect(lambda: self._start_job("inspect"))
+        actions.addWidget(self.inspect_button)
         self.stop_button = QPushButton("停止")
         self.stop_button.setObjectName("stopLogin")
-        self.inspect_button.clicked.connect(lambda: self._start_job("inspect"))
-        self.start_button.clicked.connect(lambda: self._start_job("login"))
+        self.stop_button.setIcon(icon("stop", "#b25252"))
         self.stop_button.clicked.connect(self._stop)
-        for button in (self.inspect_button, self.start_button, self.stop_button):
-            button.setMinimumHeight(36)
-            buttons.addWidget(button)
-        layout.addLayout(buttons)
-        self.status = QLabel("正在初始化浏览器控制模块…")
-        self.status.setWordWrap(True)
-        self.status.setTextFormat(Qt.PlainText)
-        layout.addWidget(self.status)
+        actions.addWidget(self.stop_button)
+        self.start_button = QPushButton("启动批量登录")
+        self.start_button.setObjectName("startLogin")
+        self.start_button.setIcon(icon("play", "#ffffff"))
+        self.start_button.setMinimumWidth(215)
+        self.start_button.clicked.connect(lambda: self._start_job("login"))
+        actions.addWidget(self.start_button)
+        layout.addWidget(action_card)
+        self.log_drawer = QWidget()
+        drawer = QVBoxLayout(self.log_drawer)
+        drawer.setContentsMargins(0, 0, 0, 0)
+        drawer.setSpacing(6)
         log_header = QHBoxLayout()
-        log_header.addWidget(QLabel("运行记录与导入问题"))
+        log_header.addWidget(label("运行记录与导入问题", "eyebrow"))
+        log_header.addStretch(1)
         open_log = QPushButton("打开日志目录")
+        open_log.setIcon(icon("folder"))
         open_log.clicked.connect(self._open_log_dir)
         log_header.addWidget(open_log)
-        layout.addLayout(log_header)
+        drawer.addLayout(log_header)
         self.log = QPlainTextEdit()
+        self.log.setObjectName("runLog")
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(2000)
-        self.log.setMaximumHeight(70)
-        layout.addWidget(self.log)
-        self.setStyleSheet("""
-            QMainWindow { background: #f4f6fa; }
-            QGroupBox { font-weight: 600; border: 1px solid #d8dfeb; border-radius: 6px; margin-top: 12px; padding: 12px 8px 8px; background: white; }
-            QGroupBox::title { subcontrol-origin: margin; left: 12px; }
-            QPushButton { padding: 6px 12px; border: 1px solid #bcc9da; border-radius: 4px; background: #f5f8fc; }
-            QPushButton:hover { background: #e6eef8; }
-            QPushButton:disabled { color: #8995a5; background: #eff1f5; }
-            QPushButton#startLogin { background: #2464ac; color: white; border: none; }
-            QPushButton#startLogin:disabled { background: #a9bdd4; }
-            QSplitter::handle { background: #d8dfeb; border-radius: 3px; }
-            QSplitter::handle:hover { background: #8faacb; }
-            QLineEdit, QPlainTextEdit, QListWidget, QTableWidget { background: white; padding: 4px; border: 1px solid #ccd5e0; border-radius: 3px; }
-        """)
+        self.log.setFixedHeight(84)
+        drawer.addWidget(self.log)
+        self.log_drawer.hide()
+        self.log_toggle.toggled.connect(self.log_drawer.setVisible)
+        layout.addWidget(self.log_drawer)
+        self.setStyleSheet(STYLESHEET)
+        self._render_batch()
         self._sync_information_height()
+        QTimer.singleShot(0, self._sync_information_height)
+        # Tab order follows the primary workflow even though connection fields are on a second tab.
+        tab_order = (self.concurrency, self.background, self.test_mode, self.preview_test_button,
+                     self.minutes_min, self.minutes_max, self.fastest, self.minimum_score,
+                     self.score_min, self.score_max, self.identity_button, self.people,
+                     self.bank_button, self.search, self.kind, self.question_list,
+                     self.preview, self.result_tabs, self.open_results_button,
+                     self.export_button, self.log_toggle, self.inspect_button,
+                     self.stop_button, self.start_button)
+        for first, second in zip(tab_order, tab_order[1:]):
+            QWidget.setTabOrder(first, second)
+
+    @staticmethod
+    def _style_table(table):
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SingleSelection)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.setShowGrid(False)
+        table.setMinimumHeight(50)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setMinimumSectionSize(42)
+        table.verticalHeader().setDefaultSectionSize(34)
+        table.verticalHeader().hide()
+        table.setWordWrap(False)
 
     def _sync_information_height(self):
-        # Splitter minimums must follow wrapped summaries after data is imported.
+        self.ensurePolished()
         self.info_splitter.setMinimumHeight(self.info_splitter.minimumSizeHint().height())
-        self.setMinimumHeight(max(880, self.centralWidget().minimumSizeHint().height()))
+        results = self.content_splitter.widget(1)
+        results.setMinimumHeight(results.minimumSizeHint().height())
+        self.content_splitter.setMinimumHeight(self.info_splitter.minimumHeight() + results.minimumHeight() + self.content_splitter.handleWidth())
 
     def _ready(self):
         self.backend_ready = True
@@ -361,6 +526,21 @@ class MainWindow(QMainWindow):
             widget.setEnabled(not locked)
         self.minutes_min.setEnabled(not locked and not self.fastest.isChecked())
         self.minutes_max.setEnabled(not locked and not self.fastest.isChecked())
+        if self._closing:
+            state, caption = "waiting", "●  正在关闭"
+        elif self.import_workers:
+            state, caption = "busy", "●  正在导入"
+        elif self.busy:
+            state, caption = "busy", "●  正在执行"
+        elif self.backend_ready:
+            state, caption = "ready", "●  就绪"
+        else:
+            state, caption = "waiting", "●  正在初始化"
+        self.activity_badge.setText(caption)
+        if self.activity_badge.property("state") != state:
+            self.activity_badge.setProperty("state", state)
+            self.activity_badge.style().unpolish(self.activity_badge)
+            self.activity_badge.style().polish(self.activity_badge)
 
     def show_status(self, message):
         message = redact(message)
@@ -403,11 +583,13 @@ class MainWindow(QMainWindow):
             self.candidates = []
             self.rejected = []
             self.people.setRowCount(0)
+            self.identity_count.setText("0 人")
             self.identity_summary.setText("正在导入身份文件…")
             worker.result.connect(lambda result: self.identities_loaded(result, Path(path).name))
         else:
             self.bank_source = path
             self.questions = []
+            self.bank_count.setText("0 题")
             self._filter_questions()
             self.bank_summary.setText("正在解析 PDF…")
             worker.result.connect(lambda result: self.bank_loaded(result, Path(path).name))
@@ -428,10 +610,13 @@ class MainWindow(QMainWindow):
         self.source_rows = {c.row: row for row, (c, _) in enumerate(rows)}
         for row, (c, state) in enumerate(rows):
             for column, value in enumerate((str(c.row), c.district, c.name, c.masked_id, state, "—")):
-                self.people.setItem(row, column, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                self.people.setItem(row, column, item)
         if self.candidates:
             self.people.selectRow(0)
         self.identity_summary.setText(f"{filename} · {result.sheet} · 有效 {len(self.candidates)} 人 · 问题 {len(result.issues)} 行")
+        self.identity_count.setText(f"{len(self.candidates)} 人")
         self.show_status(f"身份导入完成：有效 {len(self.candidates)} 人，问题 {len(result.issues)} 行")
         for issue in result.issues:
             self.show_status(issue)
@@ -441,7 +626,8 @@ class MainWindow(QMainWindow):
     def bank_loaded(self, result, filename=""):
         self.questions = result.questions
         counts = Counter(q.kind for q in self.questions)
-        self.bank_summary.setText(f"{filename} · {result.page_count} 页 · {len(self.questions)} 题\n判断 {counts['判断']} / 单选 {counts['单选']} / 多选 {counts['多选']} · 异常 {len(result.issues)}")
+        self.bank_summary.setText(f"{filename} · {result.page_count} 页 · 判断 {counts['判断']} / 单选 {counts['单选']} / 多选 {counts['多选']} · 异常 {len(result.issues)}")
+        self.bank_count.setText(f"{len(self.questions)} 题")
         self._filter_questions()
         self.show_status(f"题库解析完成：{len(self.questions)} 题，异常 {len(result.issues)} 题")
         for issue in result.issues:
@@ -457,6 +643,7 @@ class MainWindow(QMainWindow):
         self.question_list.clear()
         for q in self.filtered_questions:
             self.question_list.addItem(f"{q.number} · {q.kind} · {q.stem.replace(chr(10), '')[:65]}")
+            self.question_list.item(self.question_list.count() - 1).setToolTip(f"第 {q.number} 题 · {q.kind}\n{q.stem}")
         if self.filtered_questions:
             self.question_list.setCurrentRow(0)
         else:
@@ -587,12 +774,22 @@ class MainWindow(QMainWindow):
 
     def _render_batch(self):
         counts = Counter(r.status for r in self.batch_records)
-        self.batch_counts.setText(f"已完成 {counts['completed']} · 失败/中止 {counts['failed'] + counts['stopped']} · 正在进行 {counts['running']} · 未开始 {counts['pending']}")
+        batch_summary = f"已完成 {counts['completed']} · 失败/中止 {counts['failed'] + counts['stopped']} · 正在进行 {counts['running']} · 未开始 {counts['pending']}"
+        total = len(self.batch_records)
+        finished = counts['completed'] + counts['failed'] + counts['stopped']
+        self.batch_progress.setRange(0, max(1, total))
+        self.batch_progress.setValue(finished)
+        self.batch_progress.setAccessibleDescription(batch_summary)
+        self.progress_caption.setText(f"{finished} / {total} 人已处理" if total else "等待开始")
+        for key, (metric, caption, color) in self.metric_labels.items():
+            number = counts[key] + (counts['stopped'] if key == "failed" else 0)
+            metric.setText(f'<span style="color:{color}; font-size:18px; font-weight:600">{number}</span>'
+                           f'&nbsp;&nbsp;{caption}')
         active = [r for r in self.batch_records if r.status == "running"]
         summary = "；".join(f"第 {r.candidate.row} 行 · {r.candidate.name} · {status_text(r)}" for r in active[:3])
         if len(active) > 3:
             summary += f"；另 {len(active) - 3} 人（见正在进行列表）"
-        self.current_person.setText(f"正在执行 {len(active)} 人：{summary}" if active else "当前人员：无（等待开始或本批次已结束）")
+        self.current_person.setText(f"正在执行 {len(active)} 人：{summary}" if active else ("本批次暂无正在执行的人员" if total else "导入身份并启动批次后，在这里查看实时进度"))
         for key, table in self.result_tables.items():
             records = [r for r in self.batch_records if r.status == key or (key == "failed" and r.status == "stopped")]
             table.setRowCount(len(records))
@@ -602,6 +799,13 @@ class MainWindow(QMainWindow):
                 for column, value in enumerate((str(c.row), c.district, c.name, c.masked_id, score, r.reason or status_text(r))):
                     item = QTableWidgetItem(value)
                     item.setToolTip(value)
+                    if column == 4 and r.score is not None:
+                        item.setForeground(QColor(ACCENT))
+                        font = item.font()
+                        font.setBold(True)
+                        item.setFont(font)
+                    if column == 5:
+                        item.setForeground(QColor({"running": "#4679a8", "completed": ACCENT, "failed": "#b06760", "stopped": "#b06760"}.get(r.status, "#6b8287")))
                     table.setItem(row, column, item)
         for r in self.batch_records:
             row = getattr(self, "source_rows", {}).get(r.candidate.row)

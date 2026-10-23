@@ -7,6 +7,7 @@ root = Path(SPECPATH)
 datas = collect_data_files('ddddocr') + collect_data_files('playwright')
 datas += [(str(root / '使用说明.md'), '.')]
 datas += [(str(root / 'webassistant/assets/mock_exam'), 'webassistant/assets/mock_exam')]
+datas += [(str(root / 'webassistant/assets/ui'), 'webassistant/assets/ui')]
 for distribution in distributions():
     for item in distribution.files or []:
         parts = tuple(str(p).lower() for p in item.parts)

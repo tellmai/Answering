@@ -2,11 +2,13 @@
 
 Windows 10/11 64 位桌面软件。导入身份 Excel 后，按设置的并发数量完成区县选择、考生登录、身份填写及本机验证码识别；可在登录后运行本地生成的 100 题模拟试卷，记录每人的处理状态、分数和用时。
 
-当前版本：**1.4.1**。真实网站操作止于登录；自动答题、分数范围和计时设置作用于软件生成的本地模拟试卷。
+当前源码版本：**1.4.2**；最新正式发布版本：**1.4.1**。v1.4.2 已完成界面改版与源码验证，EXE 已构建，但本机企业应用控制策略阻止启动未签名程序，正式 EXE 自检及新版发布尚未完成。真实网站操作止于登录；自动答题、分数范围和计时设置作用于软件生成的本地模拟试卷。
+
+![v1.4.2 工作台预览，使用合成演示数据](docs/images/workspace.png)
 
 ## 下载与运行
 
-前往 [v1.4.1 下载页面](https://github.com/tellmai/Answering/releases/tag/v1.4.1)，下载 `Answering-Windows-x64-v1.4.1.zip`，完整解压后双击 `Answering/Answering.exe`。发布附件使用英文文件名，软件界面及说明为中文。
+已发布版本请前往 [v1.4.1 下载页面](https://github.com/tellmai/Answering/releases/tag/v1.4.1)，下载 `Answering-Windows-x64-v1.4.1.zip`，完整解压后双击 `Answering/Answering.exe`。v1.4.1 使用原界面；本文的工作台预览与操作说明对应 v1.4.2 源码。发布附件使用英文文件名，软件界面及说明为中文。
 
 - 完整包包含 EXE、Qt、Playwright 驱动、OCR 模型和备用 Chrome，无需安装 Python，属于解压运行的免安装包。
 - 必须保留 EXE 旁的 `_internal` 文件夹。单独提供的 `Answering.exe` 是同一版本的启动程序，不能离开完整包独立运行。
@@ -27,9 +29,13 @@ Windows 10/11 64 位桌面软件。导入身份 Excel 后，按设置的并发�
 
 ## 界面操作
 
-“测试开关”只切换批次执行模式，不打开试卷；需要查看试卷时点击“重新生成 / 预览试卷”，无需先开启测试开关。最快完成仍进行两次全部答案校验和提交后评分核对。
+主界面采用浅灰绿工作台布局，使用统一的图标、表格、圆角卡片与操作层级。“执行与模拟”页集中设置并发、后台执行、用时和得分；“连接与保存”页设置网站、浏览器与结果目录。底部始终保留启动、停止和环境检测，“运行记录”按钮展开或收起日志。
 
-拖动身份信息与题库之间的竖向分隔条，可调整左右比例；拖动上方信息区与批量进度/成绩之间的横向分隔条，可调整上下比例。布局会自动保存，重启后恢复，分区不会被拖动隐藏。
+“测试开关”只切换批次执行模式，不打开试卷；需要查看试卷时点击“预览试卷”，无需先开启测试开关。最快完成仍进行两次全部答案校验和提交后评分核对。
+
+拖动身份信息与题库之间的竖向分隔条，可调整左右比例；拖动上方信息区与批量进度/成绩之间的横向分隔条，可调整上下比例。题目列表与题目详情也可拖动调整。布局会自动保存，重启后恢复，分区不会被拖动隐藏。窗口较小时，中间工作区可滚动，底部操作保持可见。
+
+批次进度条和分类计数跟随真实人员状态更新，失败或中止也计入已处理人数；界面用不同颜色区分进行中、已完成和失败记录。长路径和状态省略显示，悬停可查看完整内容。
 
 ## 主要功能
 
@@ -69,9 +75,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe scripts\package_release.py
 ```
 
-完整发布前先运行 `scripts/fetch_chrome.py` 准备备用浏览器。发布附件输出到 `dist/releases/v1.4.1`。打包脚本同时生成 `Answering-Source-v1.4.1.zip`、`UserGuide.md`、`Validation.md`、`release-manifest.json` 和 `SHA256SUMS.txt`。
+完整发布前先运行 `scripts/fetch_chrome.py` 准备备用浏览器。发布附件输出到 `dist/releases/v1.4.2`。打包脚本同时生成 `Answering-Source-v1.4.2.zip`、`UserGuide.md`、`Validation.md`、`release-manifest.json` 和 `SHA256SUMS.txt`。
 
-`requirements.in` 声明直接依赖，`requirements.txt` 锁定已验证版本。`dist/Answering` 是完整运行目录，`dist/releases/v1.4.1` 中生成免安装 ZIP、源码 ZIP 和发布附件。打包前下载的 `tools/chrome` 会随软件分发。
+`requirements.in` 声明直接依赖，`requirements.txt` 锁定已验证版本。`dist/Answering` 是完整运行目录，`dist/releases/v1.4.2` 中生成免安装 ZIP、源码 ZIP 和发布附件。打包前下载的 `tools/chrome` 会随软件分发。
 
 离线自检：
 
